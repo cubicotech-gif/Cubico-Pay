@@ -1,7 +1,7 @@
 /**
  * CUBICO PAY — APPS SCRIPT BACKEND
  * ============================================
- * Last modified: 2026-05-02 (added months/entries endpoints, expanded recent payload)
+ * Last modified: 2026-05-02 (newest-on-top inserts; months/entries endpoints; expanded recent payload)
  *
  * Receives POST requests from the Cubico Pay PWA, validates the shared
  * secret, and writes the payment entry directly into the "Payments Log"
@@ -139,54 +139,42 @@ function doPost(e) {
       return jsonResponse({ ok: false, error: `Tab "${SHEET_NAME}" not found in spreadsheet` });
     }
 
-    // ---- Find next empty row by scanning column A (Payment Received Date) ----
-    // Column A is empty for unfilled rows even though F/H/J have formulas,
-    // because formulas there return "" when their inputs are empty.
-    const maxRows = sheet.getMaxRows();
-    const colA = sheet.getRange(2, 1, maxRows - 1, 1).getValues();
-    let nextRow = -1;
-    for (let i = 0; i < colA.length; i++) {
-      const v = colA[i][0];
-      if (v === '' || v === null || v === undefined) {
-        nextRow = i + 2;
-        break;
-      }
-    }
-    if (nextRow === -1) {
-      return jsonResponse({
-        ok: false,
-        error: 'Payments Log is full. Extend the row range in your sheet.'
-      });
-    }
+    // ---- Insert a fresh row at the top so newest entries appear first ----
+    // After insertRowBefore(2): the new blank row is row 2, and what was
+    // previously rows 2..N is now rows 3..(N+1). Existing formulas auto-
+    // adjust their row references — nothing else to do for them.
+    sheet.insertRowBefore(2);
+    const targetRow = 2;
+    const tplRow = 3; // template — first pre-filled row, now shifted down
+
+    // Re-seed the formula / default-value columns on the new top row by
+    // copying from the template row directly below it.
+    //   F = PKR Amount             (formula)
+    //   G = Transaction Fee %      (default 4% literal)
+    //   H = Final PKR to Pay       (formula)
+    //   J = Days Since Received    (formula)
+    [6, 8, 10].forEach((col) => {
+      const f = sheet.getRange(tplRow, col).getFormulaR1C1();
+      if (f) sheet.getRange(targetRow, col).setFormulaR1C1(f);
+    });
+    const gVal = sheet.getRange(tplRow, 7).getValue();
+    if (gVal !== '' && gVal !== null) sheet.getRange(targetRow, 7).setValue(gVal);
 
     // ---- Write the entry ----
-    // Columns:
-    //   A = Payment Received Date  (from form)
-    //   B = Client / Sender Name   (from form)
-    //   C = USD Amount             (from form)
-    //   D = Account                (from form)
-    //   E = Receipt Confirmation   (from form)
-    //   F = PKR Amount             (formula — pre-existing)
-    //   G = Transaction Fee %      (default 4% — pre-existing)
-    //   H = Final PKR to Pay       (formula — pre-existing)
-    //   I = Paid Status            (manual, later)
-    //   J = Days Since Received    (formula — pre-existing)
-    //   K = Disbursement Batch Ref (manual, later)
-    //   L = ROE PKR per USD        (manual, later)
-    //   M = Entry Date             (auto-stamped now)
-    sheet.getRange(nextRow, 1, 1, 5).setValues([[
+    // Columns A–E come from the form, M is auto-stamped, I/K/L stay manual.
+    sheet.getRange(targetRow, 1, 1, 5).setValues([[
       paymentDate, clientName, usdAmount, data.account, data.receipt
     ]]);
-    sheet.getRange(nextRow, 13).setValue(new Date());
+    sheet.getRange(targetRow, 13).setValue(new Date());
 
     // ---- Format the cells we just wrote ----
-    sheet.getRange(nextRow, 1).setNumberFormat('yyyy-mm-dd');
-    sheet.getRange(nextRow, 3).setNumberFormat('$#,##0.00');
-    sheet.getRange(nextRow, 13).setNumberFormat('yyyy-mm-dd');
+    sheet.getRange(targetRow, 1).setNumberFormat('yyyy-mm-dd');
+    sheet.getRange(targetRow, 3).setNumberFormat('$#,##0.00');
+    sheet.getRange(targetRow, 13).setNumberFormat('yyyy-mm-dd');
 
     return jsonResponse({
       ok: true,
-      row: nextRow,
+      row: targetRow,
       message: `Logged $${usdAmount.toFixed(2)} from ${clientName} via ${data.account}`
     });
 
