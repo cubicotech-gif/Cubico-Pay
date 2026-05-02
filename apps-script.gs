@@ -1,7 +1,7 @@
 /**
  * CUBICO PAY — APPS SCRIPT BACKEND
  * ============================================
- * Last modified: 2026-05-02
+ * Last modified: 2026-05-02 (added months/entries endpoints, expanded recent payload)
  *
  * Receives POST requests from the Cubico Pay PWA, validates the shared
  * secret, and writes the payment entry directly into the "Payments Log"
@@ -35,6 +35,8 @@ const SHEET_NAME = 'Payments Log';
  *   (none) | ?action=health   → public health check, no auth
  *   ?action=summary&token=…   → aggregated metrics for the dashboard
  *   ?action=recent&token=…    → latest entries by Entry Date desc
+ *   ?action=months&token=…    → per-month aggregates (newest first)
+ *   ?action=entries&token=…   → all entries; optional &month=YYYY-MM filter
  *
  * Token is passed as a query param because Apps Script GET handlers
  * cannot read custom request headers reliably.
@@ -63,6 +65,15 @@ function doGet(e) {
       const rawLimit = parseInt(e.parameter.limit, 10);
       const limit = isNaN(rawLimit) ? 10 : Math.max(1, Math.min(50, rawLimit));
       return jsonResponse({ ok: true, entries: buildRecent(limit) });
+    }
+
+    if (action === 'months') {
+      return jsonResponse({ ok: true, months: buildMonths() });
+    }
+
+    if (action === 'entries') {
+      const month = e.parameter.month || '';
+      return jsonResponse({ ok: true, month: month || null, entries: buildEntries(month) });
     }
 
     return jsonResponse({ ok: false, error: `Unknown action: ${action}` });
@@ -275,28 +286,132 @@ function buildSummary() {
 
 function buildRecent(limit) {
   const rows = readFilledRows_();
+  sortByEntryDateDesc_(rows);
+  return rows.slice(0, limit).map(serializeEntry_);
+}
+
+/**
+ * Per-month aggregates, newest first. Buckets by Payment Received Date.
+ */
+function buildMonths() {
+  const rows = readFilledRows_();
+  const tz = Session.getScriptTimeZone();
+  const buckets = {}; // 'YYYY-MM' → aggregate
+
+  for (const r of rows) {
+    if (!(r.paymentDate instanceof Date)) continue;
+    const ym = Utilities.formatDate(r.paymentDate, tz, 'yyyy-MM');
+    let b = buckets[ym];
+    if (!b) {
+      b = buckets[ym] = {
+        month: ym,
+        label: Utilities.formatDate(r.paymentDate, tz, 'MMMM yyyy'),
+        count: 0,
+        totalUSD: 0,
+        totalFinalPKR: 0,
+        outstandingPKR: 0,
+        paidCount: 0,
+        unpaidCount: 0,
+        overdueCount: 0,
+        roeSum: 0,
+        roeCount: 0
+      };
+    }
+    b.count += 1;
+    if (isNumeric_(r.usdAmount))                  b.totalUSD += r.usdAmount;
+    if (isNumeric_(r.finalPKR))                   b.totalFinalPKR += r.finalPKR;
+    if (r.paidStatus === 'Paid')                  b.paidCount += 1;
+    else                                          b.unpaidCount += 1; // blank counted as unpaid
+    if (r.paidStatus !== 'Paid' && isNumeric_(r.finalPKR) && isNumeric_(r.roe) && r.roe > 0) {
+      b.outstandingPKR += r.finalPKR;
+    }
+    if (r.paidStatus !== 'Paid' && isNumeric_(r.daysSince) && r.daysSince > 10 &&
+        isNumeric_(r.roe) && r.roe > 0) {
+      b.overdueCount += 1;
+    }
+    if (isNumeric_(r.roe) && r.roe > 0) {
+      b.roeSum += r.roe;
+      b.roeCount += 1;
+    }
+  }
+
+  const out = Object.values(buckets).map((b) => ({
+    month: b.month,
+    label: b.label,
+    count: b.count,
+    totalUSD: round2_(b.totalUSD),
+    totalFinalPKR: round2_(b.totalFinalPKR),
+    outstandingPKR: round2_(b.outstandingPKR),
+    paidCount: b.paidCount,
+    unpaidCount: b.unpaidCount,
+    overdueCount: b.overdueCount,
+    avgRoe: b.roeCount > 0 ? round2_(b.roeSum / b.roeCount) : ''
+  }));
+
+  out.sort((a, b) => (a.month < b.month ? 1 : a.month > b.month ? -1 : 0));
+  return out;
+}
+
+/**
+ * All entries, optionally filtered to a specific YYYY-MM payment month.
+ * Sorted by Payment Received Date desc, then Entry Date desc.
+ */
+function buildEntries(month) {
+  const rows = readFilledRows_();
   const tz = Session.getScriptTimeZone();
 
-  // Sort by Entry Date desc; rows without an entry date sink to the bottom.
+  let filtered = rows;
+  if (month) {
+    filtered = rows.filter((r) =>
+      r.paymentDate instanceof Date &&
+      Utilities.formatDate(r.paymentDate, tz, 'yyyy-MM') === month
+    );
+  }
+
+  filtered.sort((a, b) => {
+    const pa = a.paymentDate instanceof Date ? a.paymentDate.getTime() : -Infinity;
+    const pb = b.paymentDate instanceof Date ? b.paymentDate.getTime() : -Infinity;
+    if (pb !== pa) return pb - pa;
+    const ea = a.entryDate instanceof Date ? a.entryDate.getTime() : -Infinity;
+    const eb = b.entryDate instanceof Date ? b.entryDate.getTime() : -Infinity;
+    return eb - ea;
+  });
+
+  return filtered.map(serializeEntry_);
+}
+
+function sortByEntryDateDesc_(rows) {
   rows.sort((a, b) => {
     const ta = a.entryDate instanceof Date ? a.entryDate.getTime() : -Infinity;
     const tb = b.entryDate instanceof Date ? b.entryDate.getTime() : -Infinity;
     return tb - ta;
   });
+}
 
-  return rows.slice(0, limit).map((r) => ({
+/**
+ * Common entry shape used by recent + entries. Includes every column the
+ * dashboard's expanded detail view needs.
+ */
+function serializeEntry_(r) {
+  const tz = Session.getScriptTimeZone();
+  return {
     row: r.row,
     paymentDate: r.paymentDate instanceof Date
       ? Utilities.formatDate(r.paymentDate, tz, 'yyyy-MM-dd') : '',
+    entryDate: r.entryDate instanceof Date
+      ? Utilities.formatDate(r.entryDate, tz, 'yyyy-MM-dd') : '',
     clientName: r.clientName || '',
     usdAmount: isNumeric_(r.usdAmount) ? round2_(r.usdAmount) : '',
     account: r.account || '',
     receipt: r.receipt || '',
+    pkrAmount: isNumeric_(r.pkrAmount) ? round2_(r.pkrAmount) : '',
+    feePct: isNumeric_(r.feePct) ? r.feePct : '',
+    finalPKR: isNumeric_(r.finalPKR) ? round2_(r.finalPKR) : '',
     paidStatus: r.paidStatus || '',
     daysSince: isNumeric_(r.daysSince) ? r.daysSince : '',
-    finalPKR: isNumeric_(r.finalPKR) ? round2_(r.finalPKR) : '',
+    batchRef: r.batchRef || '',
     roe: isNumeric_(r.roe) ? r.roe : ''
-  }));
+  };
 }
 
 function round2_(n) {
