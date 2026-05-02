@@ -1018,6 +1018,141 @@
     .detail-val.empty { color: var(--muted-soft); font-weight: 400; font-style: italic; }
     .detail-val.coral { color: var(--coral-deep); }
     .detail-val.success { color: var(--success); }
+
+    /* ============================================================
+       STATEMENTS — month-grouped cards
+       ============================================================ */
+    .statements-list {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .month-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--shadow-sm);
+      overflow: hidden;
+    }
+    .month-card.open { border-color: var(--navy); box-shadow: var(--shadow-md); }
+
+    .month-card-head {
+      padding: 16px 18px;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .month-card-head:focus { outline: 2px solid var(--coral); outline-offset: -2px; }
+
+    .month-card-title {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .month-name {
+      font-family: 'Fraunces', serif;
+      font-weight: 500;
+      font-size: 22px;
+      letter-spacing: -0.01em;
+      color: var(--navy);
+      line-height: 1.1;
+    }
+    .month-name em { font-style: italic; }
+    .month-count {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--muted-soft);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .month-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px 16px;
+      margin-bottom: 12px;
+    }
+    .month-stat-key {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted-soft);
+      margin-bottom: 2px;
+    }
+    .month-stat-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--navy);
+    }
+    .month-stat-val.coral { color: var(--coral-deep); }
+
+    .month-status-line {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .month-status-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .month-status-chip-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+    .month-status-chip.paid    .month-status-chip-dot { background: var(--success); }
+    .month-status-chip.unpaid  .month-status-chip-dot { background: var(--muted-soft); }
+    .month-status-chip.overdue .month-status-chip-dot { background: var(--coral); }
+    .month-status-chip.overdue { color: var(--coral-deep); font-weight: 500; }
+
+    .month-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      transition: color 0.15s ease;
+    }
+    .month-card.open .month-toggle { color: var(--navy); }
+    .month-toggle-caret {
+      width: 10px;
+      height: 10px;
+      transition: transform 0.2s ease;
+    }
+    .month-card.open .month-toggle-caret { transform: rotate(180deg); }
+
+    .month-entries {
+      display: none;
+      padding: 0 18px 18px;
+      animation: detailIn 200ms ease;
+    }
+    .month-card.open .month-entries { display: block; }
+    .month-entries .recent-list { gap: 10px; }
+    .month-entries-loading {
+      padding: 14px 0;
+      text-align: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted-soft);
+    }
     .recent-days.green  { color: var(--success); font-weight: 500; }
     .recent-days.yellow { color: var(--warn); font-weight: 500; }
     .recent-days.red    { color: var(--coral-deep); font-weight: 500; }
@@ -1346,6 +1481,45 @@
     </section>
 
     <!-- ============================================================
+         STATEMENTS VIEW
+         ============================================================ -->
+    <section class="view" id="statementsView" role="tabpanel" aria-labelledby="tabStatements">
+
+      <div class="title-block">
+        <div class="eyebrow">Statements</div>
+        <h1>Monthly <em>statement</em></h1>
+        <p class="subtitle">Each card rolls up one month of payments. Tap to drill into the entries that make it up.</p>
+      </div>
+
+      <div class="recent-section">
+        <div class="recent-section-header">
+          <span class="recent-section-title">All months</span>
+          <button class="refresh-btn" id="statementsRefreshBtn" type="button" aria-label="Refresh statements">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+              <path d="M12.5 2v3.5H9M1.5 12V8.5H5M11.5 5A4.5 4.5 0 0 0 3.2 4M2.5 9A4.5 4.5 0 0 0 10.8 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+        <div class="statements-list" id="statementsList">
+          <div class="month-card">
+            <div class="month-card-head">
+              <div class="month-card-title">
+                <span class="month-name"><span class="skeleton">Loading month</span></span>
+                <span class="month-count"><span class="skeleton">00 entries</span></span>
+              </div>
+              <div class="month-stats">
+                <div><div class="month-stat-key">USD</div><div class="month-stat-val"><span class="skeleton">$0,000</span></div></div>
+                <div><div class="month-stat-key">PKR</div><div class="month-stat-val"><span class="skeleton">₨000,000</span></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ============================================================
          FOOTER (shared)
          ============================================================ -->
     <footer class="footer">
@@ -1370,6 +1544,14 @@
         <path d="M3 12h4l2-6 4 12 2-6h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <span>Activity</span>
+    </button>
+    <button class="tab" id="tabStatements" type="button" role="tab" aria-selected="false" aria-controls="statementsView" data-tab="statements">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M6 3h9l4 4v14H6V3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+        <path d="M14 3v5h5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+        <path d="M9 12h7M9 16h7M9 8h2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      <span>Statements</span>
     </button>
   </nav>
 
@@ -1500,8 +1682,9 @@
     const ACTIVE_TAB_KEY = 'cubico-pay-active-tab';
     const tabButtons = document.querySelectorAll('.tab');
     const views = {
-      log:      document.getElementById('logView'),
-      activity: document.getElementById('activityView'),
+      log:        document.getElementById('logView'),
+      activity:   document.getElementById('activityView'),
+      statements: document.getElementById('statementsView'),
     };
     let currentTab = 'log';
 
@@ -1514,7 +1697,8 @@
         btn.setAttribute('aria-selected', sel ? 'true' : 'false');
       });
       try { localStorage.setItem(ACTIVE_TAB_KEY, name); } catch (e) { /* private mode */ }
-      if (name === 'activity' && typeof onShowActivity === 'function') onShowActivity();
+      if (name === 'activity'   && typeof onShowActivity   === 'function') onShowActivity();
+      if (name === 'statements' && typeof onShowStatements === 'function') onShowStatements();
     }
 
     tabButtons.forEach((btn) => {
@@ -1524,7 +1708,7 @@
     // Restore last-used tab
     try {
       const saved = localStorage.getItem(ACTIVE_TAB_KEY);
-      if (saved === 'activity') switchTab('activity');
+      if (saved === 'activity' || saved === 'statements') switchTab(saved);
     } catch (e) { /* private mode */ }
 
     // ============================================================
@@ -1987,6 +2171,170 @@
       const v = Number(n);
       const pct = Math.abs(v) <= 1 ? v * 100 : v;
       return pct.toFixed(pct % 1 === 0 ? 0 : 1) + '%';
+    }
+
+    // ============================================================
+    // STATEMENTS — month-by-month
+    // ============================================================
+    const statementsCache = { months: null, fetchedAt: 0, entries: {} };
+    let statementsLoading = false;
+
+    const statementsList     = document.getElementById('statementsList');
+    const statementsRefresh  = document.getElementById('statementsRefreshBtn');
+
+    statementsRefresh.addEventListener('click', () => loadStatements(true));
+
+    function onShowStatements() {
+      const stale = !statementsCache.months ||
+                    (Date.now() - statementsCache.fetchedAt > CACHE_TTL_MS);
+      if (stale) loadStatements(false);
+    }
+
+    async function loadStatements(force) {
+      if (statementsLoading) return;
+      if (!force && statementsCache.months &&
+          (Date.now() - statementsCache.fetchedAt < CACHE_TTL_MS)) return;
+      if (!navigator.onLine) {
+        if (!statementsCache.months) {
+          statementsList.innerHTML = '<div class="recent-offline">Connect to refresh</div>';
+        }
+        return;
+      }
+
+      statementsLoading = true;
+      statementsRefresh.classList.add('spinning');
+      statementsRefresh.disabled = true;
+
+      try {
+        const url = `${CONFIG.ENDPOINT}?action=months&token=${encodeURIComponent(CONFIG.TOKEN)}`;
+        const res = await fetch(url, { redirect: 'follow' });
+        if (!res.ok) throw new Error(`Months HTTP ${res.status}`);
+        const json = await res.json();
+        if (!json.ok) throw new Error(json.error || 'Months error');
+
+        statementsCache.months = json.months || [];
+        statementsCache.fetchedAt = Date.now();
+        // A refresh invalidates per-month entry caches so reopening pulls fresh.
+        statementsCache.entries = {};
+        renderStatements(statementsCache.months);
+      } catch (err) {
+        showError("Couldn't load statements", err.message || String(err));
+      } finally {
+        statementsLoading = false;
+        statementsRefresh.classList.remove('spinning');
+        statementsRefresh.disabled = false;
+      }
+    }
+
+    function renderStatements(months) {
+      if (!months || months.length === 0) {
+        statementsList.innerHTML =
+          '<div class="recent-empty">No statements yet — once payments are logged, monthly rollups appear here.</div>';
+        return;
+      }
+      statementsList.innerHTML = months.map(monthCardHtml).join('');
+    }
+
+    function monthCardHtml(m) {
+      const outstandingClass = m.outstandingPKR > 0 ? 'coral' : '';
+      const overdueChip = m.overdueCount > 0
+        ? `<span class="month-status-chip overdue"><span class="month-status-chip-dot"></span>${m.overdueCount} overdue</span>`
+        : '';
+      const avgRoe = (typeof m.avgRoe === 'number') ? Number(m.avgRoe).toFixed(2) : '—';
+
+      return ''
+        + `<div class="month-card" data-month="${escapeHtml(m.month)}">`
+        +   '<div class="month-card-head" role="button" tabindex="0" aria-expanded="false">'
+        +     '<div class="month-card-title">'
+        +       `<span class="month-name">${escapeHtml(monthLabelToParts(m.label))}</span>`
+        +       `<span class="month-count">${m.count} ${m.count === 1 ? 'entry' : 'entries'}</span>`
+        +     '</div>'
+        +     '<div class="month-stats">'
+        +       `<div><div class="month-stat-key">USD received</div><div class="month-stat-val">${formatUSD0(m.totalUSD)}</div></div>`
+        +       `<div><div class="month-stat-key">PKR final</div><div class="month-stat-val">${formatPKR(m.totalFinalPKR)}</div></div>`
+        +       `<div><div class="month-stat-key">Outstanding</div><div class="month-stat-val ${outstandingClass}">${formatPKR(m.outstandingPKR)}</div></div>`
+        +       `<div><div class="month-stat-key">Avg ROE</div><div class="month-stat-val">${avgRoe}</div></div>`
+        +     '</div>'
+        +     '<div class="month-status-line">'
+        +       `<span class="month-status-chip paid"><span class="month-status-chip-dot"></span>${m.paidCount} paid</span>`
+        +       `<span class="month-status-chip unpaid"><span class="month-status-chip-dot"></span>${m.unpaidCount} unpaid</span>`
+        +       overdueChip
+        +     '</div>'
+        +     '<div class="month-toggle">'
+        +       '<span>View entries</span>'
+        +       '<svg class="month-toggle-caret" viewBox="0 0 12 8" fill="none" aria-hidden="true">'
+        +         '<path d="M1 1.5l5 5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
+        +       '</svg>'
+        +     '</div>'
+        +   '</div>'
+        +   '<div class="month-entries"><div class="recent-list"></div></div>'
+        + '</div>';
+    }
+
+    // The backend's MMMM yyyy is good as-is, but italicize the month name to
+    // match the brand's mixed Fraunces treatment.
+    function monthLabelToParts(label) {
+      // Returns the label unchanged; italics are applied via CSS on the whole
+      // .month-name span. Kept as a function so we can adjust later if needed.
+      return label || '';
+    }
+
+    // Click / keyboard to toggle a month card.
+    statementsList.addEventListener('click', (ev) => toggleMonthFromEvent(ev));
+    statementsList.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter' && ev.key !== ' ') return;
+      const row = ev.target.closest('.recent-row');
+      if (row) { ev.preventDefault(); toggleRow(row); return; }
+      const head = ev.target.closest('.month-card-head');
+      if (!head) return;
+      ev.preventDefault();
+      toggleMonth(head.parentElement);
+    });
+
+    function toggleMonthFromEvent(ev) {
+      // Inner recent-row click → toggle that row, not the month card.
+      const row = ev.target.closest('.recent-row');
+      if (row) { toggleRow(row); return; }
+      const card = ev.target.closest('.month-card');
+      if (!card) return;
+      toggleMonth(card);
+    }
+
+    function toggleMonth(card) {
+      const open = card.classList.toggle('open');
+      const head = card.querySelector('.month-card-head');
+      if (head) head.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) {
+        const month = card.dataset.month;
+        const list  = card.querySelector('.month-entries .recent-list');
+        if (statementsCache.entries[month]) {
+          list.innerHTML = statementsCache.entries[month].map(recentRowHtml).join('') ||
+            '<div class="recent-empty">No entries.</div>';
+        } else {
+          list.innerHTML = '<div class="month-entries-loading">Loading entries…</div>';
+          loadMonthEntries(month, list);
+        }
+      }
+    }
+
+    async function loadMonthEntries(month, listEl) {
+      if (!navigator.onLine) {
+        listEl.innerHTML = '<div class="recent-offline">Connect to load entries</div>';
+        return;
+      }
+      try {
+        const url = `${CONFIG.ENDPOINT}?action=entries&token=${encodeURIComponent(CONFIG.TOKEN)}&month=${encodeURIComponent(month)}`;
+        const res = await fetch(url, { redirect: 'follow' });
+        if (!res.ok) throw new Error(`Entries HTTP ${res.status}`);
+        const json = await res.json();
+        if (!json.ok) throw new Error(json.error || 'Entries error');
+        statementsCache.entries[month] = json.entries || [];
+        listEl.innerHTML = statementsCache.entries[month].map(recentRowHtml).join('') ||
+          '<div class="recent-empty">No entries.</div>';
+      } catch (err) {
+        listEl.innerHTML = '';
+        showError("Couldn't load month entries", err.message || String(err));
+      }
     }
 
     function receiptPill(receipt) {
