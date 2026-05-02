@@ -1,7 +1,7 @@
 // Cubico Pay — Service Worker
 // Strategy: cache-first for app shell, stale-while-revalidate for fonts.
 
-const CACHE_VERSION = 'cubico-pay-v3';
+const CACHE_VERSION = 'cubico-pay-v4';
 const APP_SHELL = [
   '/',
   '/index.html',
