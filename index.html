@@ -2055,6 +2055,21 @@
         renderRecent(alertsJson.entries);
       } catch (err) {
         showError("Couldn't refresh dashboard", err.message || String(err));
+        // Don't leave skeletons spinning forever — surface the failure inline.
+        if (!dashboardCache.data) {
+          Object.values(cardEls).forEach((card) => {
+            const v = card.querySelector('.summary-card-value');
+            v.textContent = '—';
+            v.classList.remove('coral');
+          });
+          cardEls.overdue.classList.remove('warn');
+          cardEls.overdue.querySelector('.summary-card-label').textContent = 'Overdue';
+          recentList.innerHTML =
+            `<div class="recent-empty">Couldn't load Activity.<br>`
+            + `<small style="color:var(--muted-soft);font-family:'JetBrains Mono',monospace;font-size:11px;">`
+            + escapeHtml(err.message || 'Tap refresh to retry.')
+            + '</small></div>';
+        }
       } finally {
         dashboardLoading = false;
         setRefreshSpinning(false);
@@ -2234,6 +2249,13 @@
         renderStatements(statementsCache.months);
       } catch (err) {
         showError("Couldn't load statements", err.message || String(err));
+        if (!statementsCache.months) {
+          statementsList.innerHTML =
+            `<div class="recent-empty">Couldn't load Statements.<br>`
+            + `<small style="color:var(--muted-soft);font-family:'JetBrains Mono',monospace;font-size:11px;">`
+            + escapeHtml(err.message || 'Tap refresh to retry.')
+            + '</small></div>';
+        }
       } finally {
         statementsLoading = false;
         statementsRefresh.classList.remove('spinning');
