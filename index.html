@@ -957,6 +957,67 @@
       gap: 6px;
       margin-top: 8px;
     }
+
+    /* Expandable row */
+    .recent-row { cursor: pointer; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
+    .recent-row:hover { border-color: var(--border-strong); }
+    .recent-row.open { border-color: var(--navy); box-shadow: var(--shadow-md); }
+    .recent-row[role="button"]:focus { outline: 2px solid var(--coral); outline-offset: 2px; }
+
+    .recent-row-caret {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      margin-left: 8px;
+      color: var(--muted-soft);
+      transition: transform 0.2s ease;
+      flex-shrink: 0;
+    }
+    .recent-row.open .recent-row-caret { transform: rotate(180deg); color: var(--navy); }
+
+    .recent-detail {
+      display: none;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }
+    .recent-row.open .recent-detail { display: block; animation: detailIn 180ms ease; }
+    @keyframes detailIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px 16px;
+    }
+    .detail-cell {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    .detail-cell.full { grid-column: 1 / -1; }
+    .detail-key {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted-soft);
+    }
+    .detail-val {
+      font-size: 13px;
+      color: var(--navy);
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .detail-val.mono {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 500;
+    }
+    .detail-val.empty { color: var(--muted-soft); font-weight: 400; font-style: italic; }
+    .detail-val.coral { color: var(--coral-deep); }
+    .detail-val.success { color: var(--success); }
     .recent-days.green  { color: var(--success); font-weight: 500; }
     .recent-days.yellow { color: var(--warn); font-weight: 500; }
     .recent-days.red    { color: var(--coral-deep); font-weight: 500; }
@@ -1735,6 +1796,25 @@
 
     refreshBtn.addEventListener('click', () => loadDashboard(true));
 
+    // Click / keyboard to toggle a row's expanded detail.
+    recentList.addEventListener('click', (ev) => toggleRowFromEvent(ev));
+    recentList.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        const row = ev.target.closest('.recent-row');
+        if (row) { ev.preventDefault(); toggleRow(row); }
+      }
+    });
+
+    function toggleRowFromEvent(ev) {
+      const row = ev.target.closest('.recent-row');
+      if (row) toggleRow(row);
+    }
+
+    function toggleRow(row) {
+      const open = row.classList.toggle('open');
+      row.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
     // Called by the tab-switcher when the Activity tab becomes active.
     function onShowActivity() {
       const stale = !dashboardCache.data ||
@@ -1854,16 +1934,59 @@
       const meta = metaParts.join('<span class="recent-meta-sep">·</span>');
 
       const tags = [receiptTag, paidTag].filter(Boolean).join('');
+      const caret = '<svg class="recent-row-caret" viewBox="0 0 12 8" fill="none" aria-hidden="true">'
+                  + '<path d="M1 1.5l5 5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
+                  + '</svg>';
 
       return ''
-        + '<div class="recent-row">'
+        + `<div class="recent-row" role="button" tabindex="0" data-row="${e.row}" aria-expanded="false">`
         +   '<div class="recent-row-top">'
         +     `<span class="recent-name">${escapeHtml(e.clientName || '—')}</span>`
-        +     `<span class="recent-amount">${usd}</span>`
+        +     '<span style="display:inline-flex;align-items:center;flex-shrink:0;">'
+        +       `<span class="recent-amount">${usd}</span>`
+        +       caret
+        +     '</span>'
         +   '</div>'
         +   (meta ? `<div class="recent-meta">${meta}</div>` : '')
         +   (tags ? `<div class="recent-tags">${tags}</div>` : '')
+        +   `<div class="recent-detail">${detailGridHtml(e)}</div>`
         + '</div>';
+    }
+
+    function detailGridHtml(e) {
+      const cells = [
+        cell_('Payment date',     e.paymentDate ? formatDate(e.paymentDate) : '', 'mono'),
+        cell_('Logged on',        e.entryDate   ? formatDate(e.entryDate)   : '', 'mono'),
+        cell_('USD amount',       (typeof e.usdAmount === 'number') ? formatUSD2(e.usdAmount) : '', 'mono'),
+        cell_('PKR amount',       (typeof e.pkrAmount === 'number') ? formatPKR(e.pkrAmount) : '', 'mono'),
+        cell_('ROE',              (typeof e.roe === 'number')        ? Number(e.roe).toFixed(2) : '', 'mono'),
+        cell_('Fee %',            (typeof e.feePct === 'number')     ? formatPct(e.feePct) : '', 'mono'),
+        cell_('Final PKR to pay', (typeof e.finalPKR === 'number')   ? formatPKR(e.finalPKR) : '', 'mono ' + (e.paidStatus === 'Paid' ? 'success' : 'coral')),
+        cell_('Days since',       (typeof e.daysSince === 'number')  ? String(e.daysSince) : '', 'mono ' + dayColorClass(e.daysSince)),
+        cell_('Account',          e.account || ''),
+        cell_('Receipt',          e.receipt || ''),
+        cell_('Paid status',      e.paidStatus || 'Unpaid'),
+        cell_('Batch ref',        e.batchRef || '', 'mono', /* full */ true),
+      ];
+      return `<div class="detail-grid">${cells.join('')}</div>`;
+    }
+
+    function cell_(label, value, valClass, full) {
+      const isEmpty = !value && value !== 0;
+      const cls = ['detail-val'];
+      if (valClass) cls.push(valClass);
+      if (isEmpty) cls.push('empty');
+      const display = isEmpty ? '—' : escapeHtml(String(value));
+      const colCls = full ? 'detail-cell full' : 'detail-cell';
+      return `<div class="${colCls}"><span class="detail-key">${escapeHtml(label)}</span>`
+           + `<span class="${cls.join(' ')}">${display}</span></div>`;
+    }
+
+    function formatPct(n) {
+      // Sheet stores fee % as 0.04 (= 4%). Tolerate either decimal or whole-number form.
+      const v = Number(n);
+      const pct = Math.abs(v) <= 1 ? v * 100 : v;
+      return pct.toFixed(pct % 1 === 0 ? 0 : 1) + '%';
     }
 
     function receiptPill(receipt) {
