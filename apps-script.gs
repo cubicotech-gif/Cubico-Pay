@@ -1,7 +1,7 @@
 /**
  * CUBICO PAY — APPS SCRIPT BACKEND
  * ============================================
- * Last modified: 2026-05-02 (newest-on-top inserts; months/entries endpoints; expanded recent payload)
+ * Last modified: 2026-05-02 (column N actual-USD-received; alerts endpoint; Pending-by-default flow)
  *
  * Receives POST requests from the Cubico Pay PWA, validates the shared
  * secret, and writes the payment entry directly into the "Payments Log"
@@ -37,6 +37,8 @@ const SHEET_NAME = 'Payments Log';
  *   ?action=recent&token=…    → latest entries by Entry Date desc
  *   ?action=months&token=…    → per-month aggregates (newest first)
  *   ?action=entries&token=…   → all entries; optional &month=YYYY-MM filter
+ *   ?action=alerts&token=…    → entries needing attention (not Confirmed
+ *                               or not Paid); newest first
  *
  * Token is passed as a query param because Apps Script GET handlers
  * cannot read custom request headers reliably.
@@ -74,6 +76,10 @@ function doGet(e) {
     if (action === 'entries') {
       const month = e.parameter.month || '';
       return jsonResponse({ ok: true, month: month || null, entries: buildEntries(month) });
+    }
+
+    if (action === 'alerts') {
+      return jsonResponse({ ok: true, entries: buildAlerts() });
     }
 
     return jsonResponse({ ok: false, error: `Unknown action: ${action}` });
@@ -202,27 +208,33 @@ function readFilledRows_() {
   const maxRows = sheet.getMaxRows();
   if (maxRows < 2) return [];
 
-  const values = sheet.getRange(2, 1, maxRows - 1, 13).getValues();
+  // Column N (actual USD received) is optional — older sheets may not have
+  // it yet. Read it when present, otherwise fall back to 13 columns.
+  const maxCols = sheet.getMaxColumns();
+  const readCols = Math.max(13, Math.min(14, maxCols));
+
+  const values = sheet.getRange(2, 1, maxRows - 1, readCols).getValues();
   const rows = [];
   for (let i = 0; i < values.length; i++) {
     const r = values[i];
     const a = r[0];
     if (a === '' || a === null || a === undefined) continue;
     rows.push({
-      row:          i + 2,
-      paymentDate:  r[0],   // Date | ''
-      clientName:   r[1],
-      usdAmount:    r[2],
-      account:      r[3],
-      receipt:      r[4],
-      pkrAmount:    r[5],   // formula or ''
-      feePct:       r[6],
-      finalPKR:     r[7],   // formula or ''
-      paidStatus:   r[8],
-      daysSince:    r[9],   // formula or ''
-      batchRef:     r[10],
-      roe:          r[11],  // number or ''
-      entryDate:    r[12]   // Date | ''
+      row:             i + 2,
+      paymentDate:     r[0],   // Date | ''
+      clientName:      r[1],
+      usdAmount:       r[2],   // sender's claimed amount
+      account:         r[3],
+      receipt:         r[4],
+      pkrAmount:       r[5],   // formula or ''
+      feePct:          r[6],
+      finalPKR:        r[7],   // formula or ''
+      paidStatus:      r[8],
+      daysSince:       r[9],   // formula or ''
+      batchRef:        r[10],
+      roe:             r[11],  // number or ''
+      entryDate:       r[12],  // Date | ''
+      actualUsdAmount: readCols >= 14 ? r[13] : ''
     });
   }
   return rows;
@@ -257,9 +269,13 @@ function buildSummary() {
 
     if (r.receipt === 'Pending') pendingReceiptsCount += 1;
 
-    if (r.paymentDate instanceof Date && isNumeric_(r.usdAmount)) {
+    // Prefer actual USD received (col N) when filled; fall back to the
+    // sender's claim so freshly logged but not-yet-verified entries still
+    // contribute a tentative figure.
+    const usdForMonth = isNumeric_(r.actualUsdAmount) ? r.actualUsdAmount : r.usdAmount;
+    if (r.paymentDate instanceof Date && isNumeric_(usdForMonth)) {
       const ym = Utilities.formatDate(r.paymentDate, tz, 'yyyy-MM');
-      if (ym === thisMonth) totalReceivedUSDThisMonth += r.usdAmount;
+      if (ym === thisMonth) totalReceivedUSDThisMonth += usdForMonth;
     }
   }
 
@@ -306,7 +322,8 @@ function buildMonths() {
       };
     }
     b.count += 1;
-    if (isNumeric_(r.usdAmount))                  b.totalUSD += r.usdAmount;
+    const usdForBucket = isNumeric_(r.actualUsdAmount) ? r.actualUsdAmount : r.usdAmount;
+    if (isNumeric_(usdForBucket))                 b.totalUSD += usdForBucket;
     if (isNumeric_(r.finalPKR))                   b.totalFinalPKR += r.finalPKR;
     if (r.paidStatus === 'Paid')                  b.paidCount += 1;
     else                                          b.unpaidCount += 1; // blank counted as unpaid
@@ -390,6 +407,7 @@ function serializeEntry_(r) {
       ? Utilities.formatDate(r.entryDate, tz, 'yyyy-MM-dd') : '',
     clientName: r.clientName || '',
     usdAmount: isNumeric_(r.usdAmount) ? round2_(r.usdAmount) : '',
+    actualUsdAmount: isNumeric_(r.actualUsdAmount) ? round2_(r.actualUsdAmount) : '',
     account: r.account || '',
     receipt: r.receipt || '',
     pkrAmount: isNumeric_(r.pkrAmount) ? round2_(r.pkrAmount) : '',
@@ -400,6 +418,22 @@ function serializeEntry_(r) {
     batchRef: r.batchRef || '',
     roe: isNumeric_(r.roe) ? r.roe : ''
   };
+}
+
+/**
+ * Worklist for the Activity tab. Anything that hasn't been Confirmed and
+ * Paid yet — sorted newest-payment-date first.
+ */
+function buildAlerts() {
+  const rows = readFilledRows_();
+  rows.sort((a, b) => {
+    const ta = a.paymentDate instanceof Date ? a.paymentDate.getTime() : -Infinity;
+    const tb = b.paymentDate instanceof Date ? b.paymentDate.getTime() : -Infinity;
+    return tb - ta;
+  });
+  return rows
+    .filter((r) => r.receipt !== 'Confirmed' || r.paidStatus !== 'Paid')
+    .map(serializeEntry_);
 }
 
 function round2_(n) {
