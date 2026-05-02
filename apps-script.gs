@@ -1,12 +1,17 @@
 /**
- * CUBICO PAY — APPS SCRIPT BACKEND (Phase 2)
+ * CUBICO PAY — APPS SCRIPT BACKEND
  * ============================================
+ * Last modified: 2026-05-02
  *
  * Receives POST requests from the Cubico Pay PWA, validates the shared
  * secret, and writes the payment entry directly into the "Payments Log"
- * tab. Returns JSON with {ok: true|false, ...}.
+ * tab. Also serves read-only GET endpoints for the in-app dashboard.
  *
- * Deployment: see step-by-step instructions in the chat.
+ * Returns JSON with {ok: true|false, ...}.
+ *
+ * NOTE: After editing this file in the repo, paste the new contents into
+ * the Apps Script editor and re-deploy (Manage Deployments → edit the
+ * existing deployment → Save). The deployed version is stale until then.
  */
 
 // ============================================
@@ -21,19 +26,52 @@ const SECRET_TOKEN = 'cube-pay-7Hk9Mn4Q8s3xL2vR';
 const SHEET_NAME = 'Payments Log';
 
 // ============================================
-// ENDPOINTS
+// ENDPOINTS — GET dispatch
 // ============================================
 
 /**
- * Health check. Visit the deployment URL in a browser to confirm it works.
- * Should return: {"ok":true,"status":"Cubico Pay backend is live"}
+ * GET handler. Dispatches on ?action=...
+ *
+ *   (none) | ?action=health   → public health check, no auth
+ *   ?action=summary&token=…   → aggregated metrics for the dashboard
+ *   ?action=recent&token=…    → latest entries by Entry Date desc
+ *
+ * Token is passed as a query param because Apps Script GET handlers
+ * cannot read custom request headers reliably.
  */
 function doGet(e) {
-  return jsonResponse({
-    ok: true,
-    status: 'Cubico Pay backend is live',
-    timestamp: new Date().toISOString()
-  });
+  const action = (e && e.parameter && e.parameter.action) || 'health';
+
+  if (action === 'health') {
+    return jsonResponse({
+      ok: true,
+      status: 'Cubico Pay backend is live',
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  // All non-health actions require the shared secret.
+  const token = e && e.parameter && e.parameter.token;
+  if (token !== SECRET_TOKEN) {
+    return jsonResponse({ ok: false, error: 'Unauthorized' });
+  }
+
+  try {
+    if (action === 'summary') return jsonResponse({ ok: true, summary: buildSummary() });
+
+    if (action === 'recent') {
+      const rawLimit = parseInt(e.parameter.limit, 10);
+      const limit = isNaN(rawLimit) ? 10 : Math.max(1, Math.min(50, rawLimit));
+      return jsonResponse({ ok: true, entries: buildRecent(limit) });
+    }
+
+    return jsonResponse({ ok: false, error: `Unknown action: ${action}` });
+  } catch (err) {
+    return jsonResponse({
+      ok: false,
+      error: 'Server error: ' + (err.message || String(err))
+    });
+  }
 }
 
 /**
@@ -147,6 +185,122 @@ function doPost(e) {
       error: 'Server error: ' + (err.message || String(err))
     });
   }
+}
+
+// ============================================
+// DASHBOARD QUERIES
+// ============================================
+
+/**
+ * Read every filled row from the Payments Log as plain objects.
+ * "Filled" = column A (Payment Received Date) is non-empty.
+ */
+function readFilledRows_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) throw new Error(`Tab "${SHEET_NAME}" not found in spreadsheet`);
+
+  const maxRows = sheet.getMaxRows();
+  if (maxRows < 2) return [];
+
+  const values = sheet.getRange(2, 1, maxRows - 1, 13).getValues();
+  const rows = [];
+  for (let i = 0; i < values.length; i++) {
+    const r = values[i];
+    const a = r[0];
+    if (a === '' || a === null || a === undefined) continue;
+    rows.push({
+      row:          i + 2,
+      paymentDate:  r[0],   // Date | ''
+      clientName:   r[1],
+      usdAmount:    r[2],
+      account:      r[3],
+      receipt:      r[4],
+      pkrAmount:    r[5],   // formula or ''
+      feePct:       r[6],
+      finalPKR:     r[7],   // formula or ''
+      paidStatus:   r[8],
+      daysSince:    r[9],   // formula or ''
+      batchRef:     r[10],
+      roe:          r[11],  // number or ''
+      entryDate:    r[12]   // Date | ''
+    });
+  }
+  return rows;
+}
+
+function isNumeric_(v) {
+  return typeof v === 'number' && !isNaN(v);
+}
+
+function buildSummary() {
+  const rows = readFilledRows_();
+  const tz = Session.getScriptTimeZone();
+  const now = new Date();
+  const thisMonth = Utilities.formatDate(now, tz, 'yyyy-MM');
+
+  let totalUnpaidPKR = 0;
+  let totalReceivedUSDThisMonth = 0;
+  let overdueCount = 0;
+  let pendingReceiptsCount = 0;
+
+  for (const r of rows) {
+    const roeSet = isNumeric_(r.roe) && r.roe > 0;
+    const isUnpaid = r.paidStatus === 'Unpaid';
+
+    if (isUnpaid && roeSet && isNumeric_(r.finalPKR)) {
+      totalUnpaidPKR += r.finalPKR;
+    }
+
+    if (isUnpaid && roeSet && isNumeric_(r.daysSince) && r.daysSince > 10) {
+      overdueCount += 1;
+    }
+
+    if (r.receipt === 'Pending') pendingReceiptsCount += 1;
+
+    if (r.paymentDate instanceof Date && isNumeric_(r.usdAmount)) {
+      const ym = Utilities.formatDate(r.paymentDate, tz, 'yyyy-MM');
+      if (ym === thisMonth) totalReceivedUSDThisMonth += r.usdAmount;
+    }
+  }
+
+  return {
+    totalUnpaidPKR: round2_(totalUnpaidPKR),
+    totalReceivedUSDThisMonth: round2_(totalReceivedUSDThisMonth),
+    overdueCount: overdueCount,
+    pendingReceiptsCount: pendingReceiptsCount,
+    totalEntries: rows.length
+  };
+}
+
+function buildRecent(limit) {
+  const rows = readFilledRows_();
+  const tz = Session.getScriptTimeZone();
+
+  // Sort by Entry Date desc; rows without an entry date sink to the bottom.
+  rows.sort((a, b) => {
+    const ta = a.entryDate instanceof Date ? a.entryDate.getTime() : -Infinity;
+    const tb = b.entryDate instanceof Date ? b.entryDate.getTime() : -Infinity;
+    return tb - ta;
+  });
+
+  return rows.slice(0, limit).map((r) => ({
+    row: r.row,
+    paymentDate: r.paymentDate instanceof Date
+      ? Utilities.formatDate(r.paymentDate, tz, 'yyyy-MM-dd') : '',
+    clientName: r.clientName || '',
+    usdAmount: isNumeric_(r.usdAmount) ? round2_(r.usdAmount) : '',
+    account: r.account || '',
+    receipt: r.receipt || '',
+    paidStatus: r.paidStatus || '',
+    daysSince: isNumeric_(r.daysSince) ? r.daysSince : '',
+    finalPKR: isNumeric_(r.finalPKR) ? round2_(r.finalPKR) : '',
+    roe: isNumeric_(r.roe) ? r.roe : ''
+  }));
+}
+
+function round2_(n) {
+  return Math.round(n * 100) / 100;
 }
 
 // ============================================
