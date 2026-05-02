@@ -1383,11 +1383,11 @@
           </div>
           <div class="pills" role="radiogroup">
             <label class="pill" data-value="Confirmed">
-              <input type="radio" name="receipt" value="Confirmed" required />
+              <input type="radio" name="receipt" value="Confirmed" />
               <span class="pill-dot"></span>Confirmed
             </label>
-            <label class="pill" data-value="Pending">
-              <input type="radio" name="receipt" value="Pending" />
+            <label class="pill active" data-value="Pending">
+              <input type="radio" name="receipt" value="Pending" required checked />
               <span class="pill-dot"></span>Pending
             </label>
             <label class="pill" data-value="Not Received">
@@ -1420,8 +1420,8 @@
 
       <div class="title-block">
         <div class="eyebrow">Activity</div>
-        <h1>Recent <em>activity</em></h1>
-        <p class="subtitle">A live read on what's outstanding, what's overdue, and the latest payments logged.</p>
+        <h1>Needs <em>attention</em></h1>
+        <p class="subtitle">Every payment that still needs to be confirmed or paid out. Reconciled entries move to Statements.</p>
       </div>
 
       <div class="summary-grid" id="summaryGrid">
@@ -1445,7 +1445,7 @@
 
       <div class="recent-section">
         <div class="recent-section-header">
-          <span class="recent-section-title">Recent activity</span>
+          <span class="recent-section-title">Awaiting action</span>
           <button class="refresh-btn" id="refreshBtn" type="button" aria-label="Refresh">
             <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
               <path d="M12.5 2v3.5H9M1.5 12V8.5H5M11.5 5A4.5 4.5 0 0 0 3.2 4M2.5 9A4.5 4.5 0 0 0 10.8 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
@@ -1771,6 +1771,14 @@
         const result = await res.json();
 
         if (result.ok) {
+          // The new entry should show up on Activity / Statements immediately.
+          dashboardCache.data = null;
+          dashboardCache.fetchedAt = 0;
+          if (typeof statementsCache !== 'undefined') {
+            statementsCache.months = null;
+            statementsCache.fetchedAt = 0;
+            statementsCache.entries = {};
+          }
           handleSuccess();
         } else {
           showError('Server rejected the entry', result.error || 'Unknown error from backend.');
@@ -1819,7 +1827,12 @@
 
       form.reset();
       document.getElementById('paymentDate').value = `${yyyy}-${mm}-${dd}`;
-      pills.forEach(p => p.classList.remove('active'));
+      // form.reset() restores the default-checked Pending radio; sync the
+      // pill UI so its `active` class matches.
+      pills.forEach((p) => {
+        const input = p.querySelector('input');
+        p.classList.toggle('active', input.checked);
+      });
       setLoading(false);
 
       setTimeout(() => successOverlay.classList.remove('visible'), 2800);
@@ -2023,23 +2036,23 @@
       try {
         const base = CONFIG.ENDPOINT;
         const tok  = encodeURIComponent(CONFIG.TOKEN);
-        const [sumRes, recRes] = await Promise.all([
+        const [sumRes, alertsRes] = await Promise.all([
           fetch(`${base}?action=summary&token=${tok}`, { redirect: 'follow' }),
-          fetch(`${base}?action=recent&token=${tok}&limit=10`, { redirect: 'follow' }),
+          fetch(`${base}?action=alerts&token=${tok}`,  { redirect: 'follow' }),
         ]);
-        if (!sumRes.ok) throw new Error(`Summary HTTP ${sumRes.status}`);
-        if (!recRes.ok) throw new Error(`Recent HTTP ${recRes.status}`);
+        if (!sumRes.ok)    throw new Error(`Summary HTTP ${sumRes.status}`);
+        if (!alertsRes.ok) throw new Error(`Alerts HTTP ${alertsRes.status}`);
 
-        const sumJson = await sumRes.json();
-        const recJson = await recRes.json();
-        if (!sumJson.ok) throw new Error(sumJson.error || 'Summary error');
-        if (!recJson.ok) throw new Error(recJson.error || 'Recent error');
+        const sumJson    = await sumRes.json();
+        const alertsJson = await alertsRes.json();
+        if (!sumJson.ok)    throw new Error(sumJson.error    || 'Summary error');
+        if (!alertsJson.ok) throw new Error(alertsJson.error || 'Alerts error');
 
-        dashboardCache.data = { summary: sumJson.summary, entries: recJson.entries };
+        dashboardCache.data = { summary: sumJson.summary, entries: alertsJson.entries };
         dashboardCache.fetchedAt = Date.now();
 
         renderSummary(sumJson.summary);
-        renderRecent(recJson.entries);
+        renderRecent(alertsJson.entries);
       } catch (err) {
         showError("Couldn't refresh dashboard", err.message || String(err));
       } finally {
@@ -2086,7 +2099,7 @@
     function renderRecent(entries) {
       if (!entries || entries.length === 0) {
         recentList.innerHTML =
-          '<div class="recent-empty">No payments yet — log your first one from the <em>Log</em> tab.</div>';
+          '<div class="recent-empty"><em>All caught up.</em><br>Every logged payment is confirmed and paid.</div>';
         return;
       }
       recentList.innerHTML = entries.map(recentRowHtml).join('');
@@ -2138,19 +2151,21 @@
     }
 
     function detailGridHtml(e) {
+      const actualFilled = (typeof e.actualUsdAmount === 'number');
       const cells = [
-        cell_('Payment date',     e.paymentDate ? formatDate(e.paymentDate) : '', 'mono'),
-        cell_('Logged on',        e.entryDate   ? formatDate(e.entryDate)   : '', 'mono'),
-        cell_('USD amount',       (typeof e.usdAmount === 'number') ? formatUSD2(e.usdAmount) : '', 'mono'),
-        cell_('PKR amount',       (typeof e.pkrAmount === 'number') ? formatPKR(e.pkrAmount) : '', 'mono'),
-        cell_('ROE',              (typeof e.roe === 'number')        ? Number(e.roe).toFixed(2) : '', 'mono'),
-        cell_('Fee %',            (typeof e.feePct === 'number')     ? formatPct(e.feePct) : '', 'mono'),
-        cell_('Final PKR to pay', (typeof e.finalPKR === 'number')   ? formatPKR(e.finalPKR) : '', 'mono ' + (e.paidStatus === 'Paid' ? 'success' : 'coral')),
-        cell_('Days since',       (typeof e.daysSince === 'number')  ? String(e.daysSince) : '', 'mono ' + dayColorClass(e.daysSince)),
-        cell_('Account',          e.account || ''),
-        cell_('Receipt',          e.receipt || ''),
-        cell_('Paid status',      e.paidStatus || 'Unpaid'),
-        cell_('Batch ref',        e.batchRef || '', 'mono', /* full */ true),
+        cell_('Payment date',      e.paymentDate ? formatDate(e.paymentDate) : '', 'mono'),
+        cell_('Logged on',         e.entryDate   ? formatDate(e.entryDate)   : '', 'mono'),
+        cell_('USD sent (claim)',  (typeof e.usdAmount === 'number') ? formatUSD2(e.usdAmount) : '', 'mono'),
+        cell_('USD received',      actualFilled ? formatUSD2(e.actualUsdAmount) : '', 'mono ' + (actualFilled ? 'success' : '')),
+        cell_('PKR amount',        (typeof e.pkrAmount === 'number') ? formatPKR(e.pkrAmount) : '', 'mono'),
+        cell_('ROE',               (typeof e.roe === 'number')        ? Number(e.roe).toFixed(2) : '', 'mono'),
+        cell_('Fee %',             (typeof e.feePct === 'number')     ? formatPct(e.feePct) : '', 'mono'),
+        cell_('Final PKR to pay',  (typeof e.finalPKR === 'number')   ? formatPKR(e.finalPKR) : '', 'mono ' + (e.paidStatus === 'Paid' ? 'success' : 'coral')),
+        cell_('Days since',        (typeof e.daysSince === 'number')  ? String(e.daysSince) : '', 'mono ' + dayColorClass(e.daysSince)),
+        cell_('Account',           e.account || ''),
+        cell_('Receipt',           e.receipt || ''),
+        cell_('Paid status',       e.paidStatus || 'Unpaid'),
+        cell_('Batch ref',         e.batchRef || '', 'mono', /* full */ true),
       ];
       return `<div class="detail-grid">${cells.join('')}</div>`;
     }
