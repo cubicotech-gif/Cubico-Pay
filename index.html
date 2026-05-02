@@ -951,6 +951,12 @@
       color: var(--muted-soft);
       margin: 0 -2px;
     }
+    .recent-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
     .recent-days.green  { color: var(--success); font-weight: 500; }
     .recent-days.yellow { color: var(--warn); font-weight: 500; }
     .recent-days.red    { color: var(--coral-deep); font-weight: 500; }
@@ -1705,6 +1711,8 @@
     function updateOnlineStatus() {
       if (navigator.onLine) {
         offlineBar.classList.remove('visible');
+        // If the user is on Activity and we never got data, try again now.
+        if (currentTab === 'activity' && !dashboardCache.data) loadDashboard(true);
       } else {
         offlineBar.classList.add('visible');
       }
@@ -1713,6 +1721,198 @@
     window.addEventListener('online', updateOnlineStatus);
     window.addEventListener('offline', updateOnlineStatus);
     updateOnlineStatus();
+
+    // ============================================================
+    // DASHBOARD — summary + recent fetching
+    // ============================================================
+    const CACHE_TTL_MS = 60 * 1000;
+    const dashboardCache = { data: null, fetchedAt: 0 };
+    let dashboardLoading = false;
+
+    const refreshBtn  = document.getElementById('refreshBtn');
+    const summaryGrid = document.getElementById('summaryGrid');
+    const recentList  = document.getElementById('recentList');
+
+    refreshBtn.addEventListener('click', () => loadDashboard(true));
+
+    // Called by the tab-switcher when the Activity tab becomes active.
+    function onShowActivity() {
+      const stale = !dashboardCache.data ||
+                    (Date.now() - dashboardCache.fetchedAt > CACHE_TTL_MS);
+      if (stale) loadDashboard(false);
+    }
+
+    async function loadDashboard(force) {
+      if (dashboardLoading) return;
+      if (!force && dashboardCache.data &&
+          (Date.now() - dashboardCache.fetchedAt < CACHE_TTL_MS)) {
+        return;
+      }
+      if (!navigator.onLine) {
+        renderOffline();
+        return;
+      }
+
+      dashboardLoading = true;
+      setRefreshSpinning(true);
+
+      try {
+        const base = CONFIG.ENDPOINT;
+        const tok  = encodeURIComponent(CONFIG.TOKEN);
+        const [sumRes, recRes] = await Promise.all([
+          fetch(`${base}?action=summary&token=${tok}`, { redirect: 'follow' }),
+          fetch(`${base}?action=recent&token=${tok}&limit=10`, { redirect: 'follow' }),
+        ]);
+        if (!sumRes.ok) throw new Error(`Summary HTTP ${sumRes.status}`);
+        if (!recRes.ok) throw new Error(`Recent HTTP ${recRes.status}`);
+
+        const sumJson = await sumRes.json();
+        const recJson = await recRes.json();
+        if (!sumJson.ok) throw new Error(sumJson.error || 'Summary error');
+        if (!recJson.ok) throw new Error(recJson.error || 'Recent error');
+
+        dashboardCache.data = { summary: sumJson.summary, entries: recJson.entries };
+        dashboardCache.fetchedAt = Date.now();
+
+        renderSummary(sumJson.summary);
+        renderRecent(recJson.entries);
+      } catch (err) {
+        showError("Couldn't refresh dashboard", err.message || String(err));
+      } finally {
+        dashboardLoading = false;
+        setRefreshSpinning(false);
+      }
+    }
+
+    function setRefreshSpinning(on) {
+      refreshBtn.classList.toggle('spinning', on);
+      refreshBtn.disabled = on;
+    }
+
+    // ---------- Rendering ----------
+    const cardEls = {
+      unpaid:  summaryGrid.querySelector('[data-card="unpaid"]'),
+      overdue: summaryGrid.querySelector('[data-card="overdue"]'),
+      month:   summaryGrid.querySelector('[data-card="month"]'),
+      pending: summaryGrid.querySelector('[data-card="pending"]'),
+    };
+
+    function setCardValue(card, text, highlight) {
+      const v = card.querySelector('.summary-card-value');
+      v.textContent = text;
+      v.classList.toggle('coral', highlight === 'coral');
+    }
+
+    function renderSummary(s) {
+      setCardValue(cardEls.unpaid,  formatPKR(s.totalUnpaidPKR),
+                   s.totalUnpaidPKR > 0 ? 'coral' : '');
+      setCardValue(cardEls.overdue, String(s.overdueCount));
+      cardEls.overdue.classList.toggle('warn', s.overdueCount > 0);
+      cardEls.overdue.querySelector('.summary-card-label').innerHTML =
+        s.overdueCount > 0
+          ? '<svg class="summary-card-warn-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">'
+            + '<path d="M12 3l10 18H2L12 3z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>'
+            + '<path d="M12 10v4M12 17v0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+            + '</svg>Overdue'
+          : 'Overdue';
+      setCardValue(cardEls.month,   formatUSD0(s.totalReceivedUSDThisMonth));
+      setCardValue(cardEls.pending, String(s.pendingReceiptsCount));
+    }
+
+    function renderRecent(entries) {
+      if (!entries || entries.length === 0) {
+        recentList.innerHTML =
+          '<div class="recent-empty">No payments yet — log your first one from the <em>Log</em> tab.</div>';
+        return;
+      }
+      recentList.innerHTML = entries.map(recentRowHtml).join('');
+    }
+
+    function renderOffline() {
+      if (dashboardCache.data) return; // keep prior data on screen
+      Object.values(cardEls).forEach((card) => {
+        const v = card.querySelector('.summary-card-value');
+        v.textContent = '—';
+        v.classList.remove('coral');
+      });
+      cardEls.overdue.classList.remove('warn');
+      cardEls.overdue.querySelector('.summary-card-label').textContent = 'Overdue';
+      recentList.innerHTML = '<div class="recent-offline">Connect to refresh</div>';
+    }
+
+    // ---------- Row rendering helpers ----------
+    function recentRowHtml(e) {
+      const usd = (typeof e.usdAmount === 'number') ? formatUSD2(e.usdAmount) : '';
+      const dayText = relativeDay(e.daysSince, e.paymentDate);
+      const dayClass = dayColorClass(e.daysSince);
+      const receiptTag = receiptPill(e.receipt);
+      const paidTag    = paidPill(e.paidStatus);
+
+      const metaParts = [];
+      if (e.account) metaParts.push(`<span class="recent-meta-text">${escapeHtml(e.account)}</span>`);
+      if (dayText)   metaParts.push(`<span class="recent-days ${dayClass}">${escapeHtml(dayText)}</span>`);
+      const meta = metaParts.join('<span class="recent-meta-sep">·</span>');
+
+      const tags = [receiptTag, paidTag].filter(Boolean).join('');
+
+      return ''
+        + '<div class="recent-row">'
+        +   '<div class="recent-row-top">'
+        +     `<span class="recent-name">${escapeHtml(e.clientName || '—')}</span>`
+        +     `<span class="recent-amount">${usd}</span>`
+        +   '</div>'
+        +   (meta ? `<div class="recent-meta">${meta}</div>` : '')
+        +   (tags ? `<div class="recent-tags">${tags}</div>` : '')
+        + '</div>';
+    }
+
+    function receiptPill(receipt) {
+      if (receipt === 'Confirmed')    return '<span class="recent-tag confirmed"><span class="recent-tag-dot"></span>Confirmed</span>';
+      if (receipt === 'Pending')      return '<span class="recent-tag pending"><span class="recent-tag-dot"></span>Pending</span>';
+      if (receipt === 'Not Received') return '<span class="recent-tag notreceived"><span class="recent-tag-dot"></span>Not Received</span>';
+      return '';
+    }
+
+    function paidPill(status) {
+      if (status === 'Paid')   return '<span class="recent-tag paid"><span class="recent-tag-dot"></span>Paid</span>';
+      // Treat blank/unknown as Unpaid — that's the default lifecycle state.
+      return '<span class="recent-tag unpaid"><span class="recent-tag-dot"></span>Unpaid</span>';
+    }
+
+    function relativeDay(days, paymentDate) {
+      if (typeof days === 'number') {
+        if (days <= 0) return 'today';
+        if (days === 1) return 'yesterday';
+        return days + ' days ago';
+      }
+      return paymentDate ? formatDate(paymentDate) : '';
+    }
+
+    function dayColorClass(days) {
+      if (typeof days !== 'number') return '';
+      if (days <= 6)  return 'green';
+      if (days <= 10) return 'yellow';
+      return 'red';
+    }
+
+    function formatPKR(n) {
+      const v = Math.round(Number(n) || 0);
+      return '₨' + v.toLocaleString('en-US');
+    }
+    function formatUSD0(n) {
+      const v = Math.round(Number(n) || 0);
+      return '$' + v.toLocaleString('en-US');
+    }
+    function formatUSD2(n) {
+      return '$' + Number(n).toLocaleString('en-US', {
+        minimumFractionDigits: 2, maximumFractionDigits: 2
+      });
+    }
+    function escapeHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+    }
   </script>
 
 </body>
