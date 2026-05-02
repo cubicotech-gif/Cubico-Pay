@@ -97,7 +97,7 @@
     .container {
       max-width: 520px;
       margin: 0 auto;
-      padding: 32px 20px 80px;
+      padding: 32px 20px 120px;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
@@ -106,7 +106,7 @@
     @supports (padding: env(safe-area-inset-top)) {
       .container {
         padding-top: max(32px, env(safe-area-inset-top));
-        padding-bottom: max(80px, calc(env(safe-area-inset-bottom) + 60px));
+        padding-bottom: max(120px, calc(env(safe-area-inset-bottom) + 96px));
         padding-left: max(20px, env(safe-area-inset-left));
         padding-right: max(20px, env(safe-area-inset-right));
       }
@@ -801,10 +801,289 @@
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
     /* ============================================================
+       VIEWS — tab-switched panes
+       ============================================================ */
+    .view { display: none; animation: viewIn 200ms ease; }
+    .view.view-active { display: block; }
+    @keyframes viewIn { from { opacity: 0; } to { opacity: 1; } }
+
+    /* ============================================================
+       SUMMARY CARDS (Activity view)
+       ============================================================ */
+    .summary-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+    @media (min-width: 720px) {
+      .summary-grid { grid-template-columns: repeat(4, 1fr); }
+    }
+
+    .summary-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: var(--shadow-sm);
+      position: relative;
+      transition: border-color 0.15s ease;
+    }
+    .summary-card.warn {
+      border-color: var(--coral);
+      border-width: 1.5px;
+    }
+    .summary-card-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: var(--muted-soft);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .summary-card-warn-icon {
+      width: 12px;
+      height: 12px;
+      color: var(--coral);
+    }
+    .summary-card-value {
+      font-family: 'Fraunces', serif;
+      font-weight: 500;
+      font-size: 24px;
+      letter-spacing: -0.01em;
+      line-height: 1.05;
+      color: var(--navy);
+    }
+    .summary-card-value.coral { color: var(--coral-deep); }
+
+    /* ============================================================
+       RECENT ACTIVITY LIST
+       ============================================================ */
+    .recent-section { margin-bottom: 16px; }
+
+    .recent-section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .recent-section-title {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--muted-soft);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .refresh-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-family: inherit;
+      font-size: 11px;
+      color: var(--muted);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      transition: color 0.15s ease, border-color 0.15s ease;
+    }
+    .refresh-btn:hover:not(:disabled) {
+      color: var(--navy);
+      border-color: var(--border-strong);
+    }
+    .refresh-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .refresh-btn.spinning svg { animation: spin 0.8s linear infinite; }
+
+    .recent-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .recent-row {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px;
+      box-shadow: var(--shadow-sm);
+    }
+    .recent-row-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 6px;
+    }
+    .recent-name {
+      font-weight: 600;
+      color: var(--navy);
+      font-size: 14px;
+      letter-spacing: -0.005em;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .recent-amount {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--navy);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .recent-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .recent-meta-text { color: var(--muted); }
+    .recent-meta-sep {
+      color: var(--muted-soft);
+      margin: 0 -2px;
+    }
+    .recent-days.green  { color: var(--success); font-weight: 500; }
+    .recent-days.yellow { color: var(--warn); font-weight: 500; }
+    .recent-days.red    { color: var(--coral-deep); font-weight: 500; }
+
+    .recent-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .recent-tag-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+    .recent-tag.confirmed { background: rgba(16, 185, 129, 0.10); color: var(--success); }
+    .recent-tag.confirmed .recent-tag-dot { background: var(--success); }
+    .recent-tag.pending   { background: rgba(245, 158, 11, 0.12); color: var(--warn); }
+    .recent-tag.pending .recent-tag-dot   { background: var(--warn); }
+    .recent-tag.notreceived { background: var(--coral-soft); color: var(--coral-deep); }
+    .recent-tag.notreceived .recent-tag-dot { background: var(--coral); }
+    .recent-tag.paid   { background: rgba(10, 22, 40, 0.06); color: var(--navy); }
+    .recent-tag.paid .recent-tag-dot   { background: var(--navy); }
+    .recent-tag.unpaid {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      padding: 1px 7px;
+    }
+    .recent-tag.unpaid .recent-tag-dot { background: var(--muted-soft); }
+
+    .recent-empty {
+      text-align: center;
+      padding: 48px 20px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+      background: var(--surface);
+      border: 1px dashed var(--border-strong);
+      border-radius: 12px;
+    }
+    .recent-empty em {
+      font-family: 'Fraunces', serif;
+      font-style: italic;
+      color: var(--navy);
+    }
+    .recent-offline {
+      text-align: center;
+      padding: 32px 20px;
+      color: var(--muted-soft);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    /* ============================================================
+       SKELETON LOADERS
+       ============================================================ */
+    .skeleton {
+      display: inline-block;
+      background: linear-gradient(90deg, var(--border) 0%, var(--bg) 50%, var(--border) 100%);
+      background-size: 200% 100%;
+      animation: skeletonPulse 1.4s ease-in-out infinite;
+      border-radius: 6px;
+      color: transparent;
+    }
+    .skeleton-block { display: block; }
+    @keyframes skeletonPulse {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* ============================================================
+       BOTTOM TAB BAR
+       ============================================================ */
+    .tabbar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      display: flex;
+      z-index: 40;
+      box-shadow: 0 -4px 16px rgba(10, 22, 40, 0.04);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    .tab {
+      flex: 1;
+      min-height: 56px;
+      padding: 10px 12px;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted-soft);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      position: relative;
+      transition: color 0.15s ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .tab svg { display: block; }
+    .tab[aria-selected="true"] { color: var(--navy); }
+    .tab[aria-selected="true"]::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 28px;
+      height: 2px;
+      background: var(--coral);
+      border-radius: 0 0 2px 2px;
+    }
+
+    /* ============================================================
        RESPONSIVE — phone tweaks
        ============================================================ */
     @media (max-width: 480px) {
-      .container { padding: 20px 16px 60px; }
+      .container { padding: 20px 16px 110px; }
       h1 { font-size: 32px; }
       .form-card { padding: 22px 18px; border-radius: 14px; }
       .pills { gap: 6px; }
@@ -819,7 +1098,7 @@
   <div class="container">
 
     <!-- ============================================================
-         HEADER
+         HEADER (shared across views)
          ============================================================ -->
     <header class="header">
       <div class="brand">
@@ -828,6 +1107,11 @@
       </div>
       <div class="header-meta" id="todayDate"></div>
     </header>
+
+    <!-- ============================================================
+         LOG VIEW
+         ============================================================ -->
+    <section class="view view-active" id="logView" role="tabpanel" aria-labelledby="tabLog">
 
     <!-- ============================================================
          TITLE
@@ -925,14 +1209,102 @@
       </div>
     </div>
 
+    </section>
+
     <!-- ============================================================
-         FOOTER
+         ACTIVITY VIEW
+         ============================================================ -->
+    <section class="view" id="activityView" role="tabpanel" aria-labelledby="tabActivity">
+
+      <div class="title-block">
+        <div class="eyebrow">Activity</div>
+        <h1>Recent <em>activity</em></h1>
+        <p class="subtitle">A live read on what's outstanding, what's overdue, and the latest payments logged.</p>
+      </div>
+
+      <div class="summary-grid" id="summaryGrid">
+        <div class="summary-card" data-card="unpaid">
+          <div class="summary-card-label">Unpaid PKR</div>
+          <div class="summary-card-value"><span class="skeleton">₨000,000</span></div>
+        </div>
+        <div class="summary-card" data-card="overdue">
+          <div class="summary-card-label">Overdue</div>
+          <div class="summary-card-value"><span class="skeleton">00</span></div>
+        </div>
+        <div class="summary-card" data-card="month">
+          <div class="summary-card-label">This month USD</div>
+          <div class="summary-card-value"><span class="skeleton">$0,000</span></div>
+        </div>
+        <div class="summary-card" data-card="pending">
+          <div class="summary-card-label">Pending receipts</div>
+          <div class="summary-card-value"><span class="skeleton">00</span></div>
+        </div>
+      </div>
+
+      <div class="recent-section">
+        <div class="recent-section-header">
+          <span class="recent-section-title">Recent activity</span>
+          <button class="refresh-btn" id="refreshBtn" type="button" aria-label="Refresh">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+              <path d="M12.5 2v3.5H9M1.5 12V8.5H5M11.5 5A4.5 4.5 0 0 0 3.2 4M2.5 9A4.5 4.5 0 0 0 10.8 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+        <div class="recent-list" id="recentList">
+          <div class="recent-row">
+            <div class="recent-row-top">
+              <span class="recent-name"><span class="skeleton">Loading client name</span></span>
+              <span class="recent-amount"><span class="skeleton">$000</span></span>
+            </div>
+            <div class="recent-meta"><span class="skeleton">Account · date · status</span></div>
+          </div>
+          <div class="recent-row">
+            <div class="recent-row-top">
+              <span class="recent-name"><span class="skeleton">Loading client name</span></span>
+              <span class="recent-amount"><span class="skeleton">$000</span></span>
+            </div>
+            <div class="recent-meta"><span class="skeleton">Account · date · status</span></div>
+          </div>
+          <div class="recent-row">
+            <div class="recent-row-top">
+              <span class="recent-name"><span class="skeleton">Loading client name</span></span>
+              <span class="recent-amount"><span class="skeleton">$000</span></span>
+            </div>
+            <div class="recent-meta"><span class="skeleton">Account · date · status</span></div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ============================================================
+         FOOTER (shared)
          ============================================================ -->
     <footer class="footer">
       <p class="footer-text">Cubico Technologies · <em>internal tool</em></p>
     </footer>
 
   </div>
+
+  <!-- ============================================================
+       BOTTOM TAB BAR
+       ============================================================ -->
+  <nav class="tabbar" role="tablist" aria-label="Primary">
+    <button class="tab" id="tabLog" type="button" role="tab" aria-selected="true" aria-controls="logView" data-tab="log">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M14.5 4.5l5 5L8 21H3v-5L14.5 4.5z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M13 6l5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>Log</span>
+    </button>
+    <button class="tab" id="tabActivity" type="button" role="tab" aria-selected="false" aria-controls="activityView" data-tab="activity">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M3 12h4l2-6 4 12 2-6h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>Activity</span>
+    </button>
+  </nav>
 
   <!-- ============================================================
        SUCCESS OVERLAY
@@ -1054,6 +1426,39 @@
 
     document.getElementById('paymentDate').value = `${yyyy}-${mm}-${dd}`;
     document.getElementById('todayDate').textContent = `${dd}.${mm}.${yyyy}`;
+
+    // ============================================================
+    // TAB BAR — Log / Activity view switching
+    // ============================================================
+    const ACTIVE_TAB_KEY = 'cubico-pay-active-tab';
+    const tabButtons = document.querySelectorAll('.tab');
+    const views = {
+      log:      document.getElementById('logView'),
+      activity: document.getElementById('activityView'),
+    };
+    let currentTab = 'log';
+
+    function switchTab(name) {
+      if (!views[name] || currentTab === name) return;
+      currentTab = name;
+      Object.entries(views).forEach(([k, el]) => el.classList.toggle('view-active', k === name));
+      tabButtons.forEach((btn) => {
+        const sel = btn.dataset.tab === name;
+        btn.setAttribute('aria-selected', sel ? 'true' : 'false');
+      });
+      try { localStorage.setItem(ACTIVE_TAB_KEY, name); } catch (e) { /* private mode */ }
+      if (name === 'activity' && typeof onShowActivity === 'function') onShowActivity();
+    }
+
+    tabButtons.forEach((btn) => {
+      btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    });
+
+    // Restore last-used tab
+    try {
+      const saved = localStorage.getItem(ACTIVE_TAB_KEY);
+      if (saved === 'activity') switchTab('activity');
+    } catch (e) { /* private mode */ }
 
     // ============================================================
     // PILL BEHAVIOR — radio group with custom UI
