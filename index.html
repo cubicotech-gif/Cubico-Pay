@@ -1523,7 +1523,7 @@
          FOOTER (shared)
          ============================================================ -->
     <footer class="footer">
-      <p class="footer-text">Cubico Technologies · <em>internal tool</em></p>
+      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v7</p>
     </footer>
 
   </div>
@@ -1993,6 +1993,43 @@
 
     refreshBtn.addEventListener('click', () => loadDashboard(true));
 
+    // Fetch helper with a hard timeout. iOS Safari occasionally keeps Apps
+    // Script fetches open indefinitely when the cross-domain redirect stalls,
+    // which would otherwise leave the dashboard locked in skeleton state.
+    async function fetchJson(url, ms) {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), ms || 25000);
+      try {
+        const res = await fetch(url, { redirect: 'follow', signal: controller.signal });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return await res.json();
+      } catch (e) {
+        if (e && e.name === 'AbortError') throw new Error('Request timed out');
+        throw e;
+      } finally {
+        clearTimeout(t);
+      }
+    }
+
+    // Try the dedicated /alerts endpoint; fall back to /recent + client-side
+    // filter so the worklist still renders if the deployed Apps Script
+    // predates alerts.
+    async function loadAlertsOrRecent(base, tok) {
+      let primaryError = null;
+      try {
+        const j = await fetchJson(`${base}?action=alerts&token=${tok}`);
+        if (j.ok) return j.entries || [];
+        primaryError = j.error || 'Alerts error';
+      } catch (e) {
+        primaryError = e.message || String(e);
+      }
+      const j2 = await fetchJson(`${base}?action=recent&token=${tok}&limit=50`);
+      if (!j2.ok) throw new Error(primaryError || j2.error || 'Could not load activity');
+      return (j2.entries || []).filter((x) =>
+        x.receipt !== 'Confirmed' || x.paidStatus !== 'Paid'
+      );
+    }
+
     // Click / keyboard to toggle a row's expanded detail.
     recentList.addEventListener('click', (ev) => toggleRowFromEvent(ev));
     recentList.addEventListener('keydown', (ev) => {
@@ -2025,7 +2062,9 @@
           (Date.now() - dashboardCache.fetchedAt < CACHE_TTL_MS)) {
         return;
       }
-      if (!navigator.onLine) {
+      // navigator.onLine lies on iOS PWA mode — only respect it for
+      // automatic loads, not when the user explicitly hits Refresh.
+      if (!force && !navigator.onLine) {
         renderOffline();
         return;
       }
@@ -2036,25 +2075,36 @@
       try {
         const base = CONFIG.ENDPOINT;
         const tok  = encodeURIComponent(CONFIG.TOKEN);
-        const [sumRes, alertsRes] = await Promise.all([
-          fetch(`${base}?action=summary&token=${tok}`, { redirect: 'follow' }),
-          fetch(`${base}?action=alerts&token=${tok}`,  { redirect: 'follow' }),
+        const [summary, entries] = await Promise.all([
+          fetchJson(`${base}?action=summary&token=${tok}`).then((j) => {
+            if (!j.ok) throw new Error(j.error || 'Summary error');
+            return j.summary;
+          }),
+          loadAlertsOrRecent(base, tok),
         ]);
-        if (!sumRes.ok)    throw new Error(`Summary HTTP ${sumRes.status}`);
-        if (!alertsRes.ok) throw new Error(`Alerts HTTP ${alertsRes.status}`);
 
-        const sumJson    = await sumRes.json();
-        const alertsJson = await alertsRes.json();
-        if (!sumJson.ok)    throw new Error(sumJson.error    || 'Summary error');
-        if (!alertsJson.ok) throw new Error(alertsJson.error || 'Alerts error');
-
-        dashboardCache.data = { summary: sumJson.summary, entries: alertsJson.entries };
+        dashboardCache.data = { summary, entries };
         dashboardCache.fetchedAt = Date.now();
 
-        renderSummary(sumJson.summary);
-        renderRecent(alertsJson.entries);
+        renderSummary(summary);
+        renderRecent(entries);
       } catch (err) {
         showError("Couldn't refresh dashboard", err.message || String(err));
+        // Don't leave skeletons spinning forever — surface the failure inline.
+        if (!dashboardCache.data) {
+          Object.values(cardEls).forEach((card) => {
+            const v = card.querySelector('.summary-card-value');
+            v.textContent = '—';
+            v.classList.remove('coral');
+          });
+          cardEls.overdue.classList.remove('warn');
+          cardEls.overdue.querySelector('.summary-card-label').textContent = 'Overdue';
+          recentList.innerHTML =
+            `<div class="recent-empty">Couldn't load Activity.<br>`
+            + `<small style="color:var(--muted-soft);font-family:'JetBrains Mono',monospace;font-size:11px;">`
+            + escapeHtml(err.message || 'Tap refresh to retry.')
+            + '</small></div>';
+        }
       } finally {
         dashboardLoading = false;
         setRefreshSpinning(false);
@@ -2209,7 +2259,7 @@
       if (statementsLoading) return;
       if (!force && statementsCache.months &&
           (Date.now() - statementsCache.fetchedAt < CACHE_TTL_MS)) return;
-      if (!navigator.onLine) {
+      if (!force && !navigator.onLine) {
         if (!statementsCache.months) {
           statementsList.innerHTML = '<div class="recent-offline">Connect to refresh</div>';
         }
@@ -2222,9 +2272,7 @@
 
       try {
         const url = `${CONFIG.ENDPOINT}?action=months&token=${encodeURIComponent(CONFIG.TOKEN)}`;
-        const res = await fetch(url, { redirect: 'follow' });
-        if (!res.ok) throw new Error(`Months HTTP ${res.status}`);
-        const json = await res.json();
+        const json = await fetchJson(url);
         if (!json.ok) throw new Error(json.error || 'Months error');
 
         statementsCache.months = json.months || [];
@@ -2234,6 +2282,13 @@
         renderStatements(statementsCache.months);
       } catch (err) {
         showError("Couldn't load statements", err.message || String(err));
+        if (!statementsCache.months) {
+          statementsList.innerHTML =
+            `<div class="recent-empty">Couldn't load Statements.<br>`
+            + `<small style="color:var(--muted-soft);font-family:'JetBrains Mono',monospace;font-size:11px;">`
+            + escapeHtml(err.message || 'Tap refresh to retry.')
+            + '</small></div>';
+        }
       } finally {
         statementsLoading = false;
         statementsRefresh.classList.remove('spinning');
@@ -2339,15 +2394,13 @@
       }
       try {
         const url = `${CONFIG.ENDPOINT}?action=entries&token=${encodeURIComponent(CONFIG.TOKEN)}&month=${encodeURIComponent(month)}`;
-        const res = await fetch(url, { redirect: 'follow' });
-        if (!res.ok) throw new Error(`Entries HTTP ${res.status}`);
-        const json = await res.json();
+        const json = await fetchJson(url);
         if (!json.ok) throw new Error(json.error || 'Entries error');
         statementsCache.entries[month] = json.entries || [];
         listEl.innerHTML = statementsCache.entries[month].map(recentRowHtml).join('') ||
           '<div class="recent-empty">No entries.</div>';
       } catch (err) {
-        listEl.innerHTML = '';
+        listEl.innerHTML = `<div class="recent-empty"><small style="color:var(--muted-soft);font-family:'JetBrains Mono',monospace;font-size:11px;">${escapeHtml(err.message || 'Failed to load entries')}</small></div>`;
         showError("Couldn't load month entries", err.message || String(err));
       }
     }

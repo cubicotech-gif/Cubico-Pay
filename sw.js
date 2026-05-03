@@ -1,7 +1,7 @@
 // Cubico Pay — Service Worker
 // Strategy: cache-first for app shell, stale-while-revalidate for fonts.
 
-const CACHE_VERSION = 'cubico-pay-v5';
+const CACHE_VERSION = 'cubico-pay-v7';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -44,6 +44,13 @@ self.addEventListener('fetch', (event) => {
 
   // Skip Google Forms submission endpoint entirely — never cache
   if (url.hostname === 'docs.google.com') return;
+
+  // Apps Script API calls must bypass the SW. Their cross-domain redirect
+  // (script.google.com → script.googleusercontent.com) can stall when
+  // proxied through cacheFirst on iOS PWA mode, locking the dashboard in
+  // skeleton state forever. Let them go straight to network.
+  if (url.hostname === 'script.google.com' ||
+      url.hostname === 'script.googleusercontent.com') return;
 
   // Stale-while-revalidate for Google Fonts (CSS + woff2)
   if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
