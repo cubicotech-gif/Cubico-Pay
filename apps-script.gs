@@ -195,10 +195,11 @@ function readFilledRows_() {
   const maxRows = sheet.getMaxRows();
   if (maxRows < 2) return [];
 
-  // Column N (actual USD received) is optional — older sheets may not have
-  // it yet. Read it when present, otherwise fall back to 13 columns.
+  // Columns N (actual USD received) and O (actual sender name) are
+  // optional — older sheets may not have them yet. Read them when present,
+  // otherwise fall back to 13 columns.
   const maxCols = sheet.getMaxColumns();
-  const readCols = Math.max(13, Math.min(14, maxCols));
+  const readCols = Math.max(13, Math.min(15, maxCols));
 
   const values = sheet.getRange(2, 1, maxRows - 1, readCols).getValues();
   const rows = [];
@@ -207,21 +208,22 @@ function readFilledRows_() {
     const a = r[0];
     if (a === '' || a === null || a === undefined) continue;
     rows.push({
-      row:             i + 2,
-      paymentDate:     r[0],   // Date | ''
-      clientName:      r[1],
-      usdAmount:       r[2],   // sender's claimed amount
-      account:         r[3],
-      receipt:         r[4],
-      pkrAmount:       r[5],   // formula or ''
-      feePct:          r[6],
-      finalPKR:        r[7],   // formula or ''
-      paidStatus:      r[8],
-      daysSince:       r[9],   // formula or ''
-      batchRef:        r[10],
-      roe:             r[11],  // number or ''
-      entryDate:       r[12],  // Date | ''
-      actualUsdAmount: readCols >= 14 ? r[13] : ''
+      row:              i + 2,
+      paymentDate:      r[0],   // Date | ''
+      clientName:       r[1],
+      usdAmount:        r[2],   // sender's claimed amount
+      account:          r[3],
+      receipt:          r[4],
+      pkrAmount:        r[5],   // formula or ''
+      feePct:           r[6],
+      finalPKR:         r[7],   // formula or ''
+      paidStatus:       r[8],
+      daysSince:        r[9],   // formula or ''
+      batchRef:         r[10],
+      roe:              r[11],  // number or ''
+      entryDate:        r[12],  // Date | ''
+      actualUsdAmount:  readCols >= 14 ? r[13] : '',
+      actualSenderName: readCols >= 15 ? r[14] : ''
     });
   }
   return rows;
@@ -354,6 +356,7 @@ function serializeEntry_(r) {
     clientName: r.clientName || '',
     usdAmount: isNumeric_(r.usdAmount) ? round2_(r.usdAmount) : '',
     actualUsdAmount: isNumeric_(r.actualUsdAmount) ? round2_(r.actualUsdAmount) : '',
+    actualSenderName: r.actualSenderName || '',
     account: r.account || '',
     receipt: r.receipt || '',
     pkrAmount: isNumeric_(r.pkrAmount) ? round2_(r.pkrAmount) : '',
