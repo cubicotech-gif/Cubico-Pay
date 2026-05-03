@@ -1523,7 +1523,7 @@
          FOOTER (shared)
          ============================================================ -->
     <footer class="footer">
-      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v7</p>
+      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v8</p>
     </footer>
 
   </div>
@@ -1771,14 +1771,10 @@
         const result = await res.json();
 
         if (result.ok) {
-          // The new entry should show up on Activity / Statements immediately.
+          // Single cache now powers both Activity and Statements; bust it
+          // so the freshly logged Pending entry shows up on next tab open.
           dashboardCache.data = null;
           dashboardCache.fetchedAt = 0;
-          if (typeof statementsCache !== 'undefined') {
-            statementsCache.months = null;
-            statementsCache.fetchedAt = 0;
-            statementsCache.entries = {};
-          }
           handleSuccess();
         } else {
           showError('Server rejected the entry', result.error || 'Unknown error from backend.');
@@ -1980,12 +1976,19 @@
     window.addEventListener('offline', updateOnlineStatus);
     updateOnlineStatus();
 
+    // Warm the dashboard cache as soon as the app opens, so the first
+    // Activity / Statements tap is instant (data already in memory).
+    if (navigator.onLine) {
+      // Defer past first paint to keep the initial render snappy.
+      setTimeout(() => loadDashboard(false), 250);
+    }
+
     // ============================================================
-    // DASHBOARD — summary + recent fetching
+    // DASHBOARD — single fetch powers Activity AND Statements
     // ============================================================
-    const CACHE_TTL_MS = 60 * 1000;
+    const CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
     const dashboardCache = { data: null, fetchedAt: 0 };
-    let dashboardLoading = false;
+    let dashboardLoadPromise = null;
 
     const refreshBtn  = document.getElementById('refreshBtn');
     const summaryGrid = document.getElementById('summaryGrid');
@@ -1993,12 +1996,10 @@
 
     refreshBtn.addEventListener('click', () => loadDashboard(true));
 
-    // Fetch helper with a hard timeout. iOS Safari occasionally keeps Apps
-    // Script fetches open indefinitely when the cross-domain redirect stalls,
-    // which would otherwise leave the dashboard locked in skeleton state.
+    // Fail fast on flaky mobile networks (12s) instead of leaving skeletons.
     async function fetchJson(url, ms) {
       const controller = new AbortController();
-      const t = setTimeout(() => controller.abort(), ms || 25000);
+      const t = setTimeout(() => controller.abort(), ms || 12000);
       try {
         const res = await fetch(url, { redirect: 'follow', signal: controller.signal });
         if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -2009,25 +2010,6 @@
       } finally {
         clearTimeout(t);
       }
-    }
-
-    // Try the dedicated /alerts endpoint; fall back to /recent + client-side
-    // filter so the worklist still renders if the deployed Apps Script
-    // predates alerts.
-    async function loadAlertsOrRecent(base, tok) {
-      let primaryError = null;
-      try {
-        const j = await fetchJson(`${base}?action=alerts&token=${tok}`);
-        if (j.ok) return j.entries || [];
-        primaryError = j.error || 'Alerts error';
-      } catch (e) {
-        primaryError = e.message || String(e);
-      }
-      const j2 = await fetchJson(`${base}?action=recent&token=${tok}&limit=50`);
-      if (!j2.ok) throw new Error(primaryError || j2.error || 'Could not load activity');
-      return (j2.entries || []).filter((x) =>
-        x.receipt !== 'Confirmed' || x.paidStatus !== 'Paid'
-      );
     }
 
     // Click / keyboard to toggle a row's expanded detail.
@@ -2049,66 +2031,58 @@
       row.setAttribute('aria-expanded', open ? 'true' : 'false');
     }
 
-    // Called by the tab-switcher when the Activity tab becomes active.
     function onShowActivity() {
-      const stale = !dashboardCache.data ||
-                    (Date.now() - dashboardCache.fetchedAt > CACHE_TTL_MS);
-      if (stale) loadDashboard(false);
+      if (!dashboardCache.data || Date.now() - dashboardCache.fetchedAt > CACHE_TTL_MS) {
+        loadDashboard(false);
+      }
     }
 
-    async function loadDashboard(force) {
-      if (dashboardLoading) return;
+    function loadDashboard(force) {
+      // Coalesce so a tab-switch + manual refresh don't double-fire.
+      if (dashboardLoadPromise) return dashboardLoadPromise;
       if (!force && dashboardCache.data &&
-          (Date.now() - dashboardCache.fetchedAt < CACHE_TTL_MS)) {
-        return;
-      }
-      // navigator.onLine lies on iOS PWA mode — only respect it for
-      // automatic loads, not when the user explicitly hits Refresh.
-      if (!force && !navigator.onLine) {
-        renderOffline();
-        return;
-      }
+          (Date.now() - dashboardCache.fetchedAt < CACHE_TTL_MS)) return Promise.resolve();
+      // navigator.onLine lies on iOS PWA mode — only respect it for auto loads.
+      if (!force && !navigator.onLine) { renderOffline(); return Promise.resolve(); }
 
-      dashboardLoading = true;
       setRefreshSpinning(true);
 
-      try {
-        const base = CONFIG.ENDPOINT;
-        const tok  = encodeURIComponent(CONFIG.TOKEN);
-        const [summary, entries] = await Promise.all([
-          fetchJson(`${base}?action=summary&token=${tok}`).then((j) => {
-            if (!j.ok) throw new Error(j.error || 'Summary error');
-            return j.summary;
-          }),
-          loadAlertsOrRecent(base, tok),
-        ]);
+      const url = `${CONFIG.ENDPOINT}?action=dashboard&token=${encodeURIComponent(CONFIG.TOKEN)}`;
+      dashboardLoadPromise = fetchJson(url)
+        .then((j) => {
+          if (!j.ok) throw new Error(j.error || 'Dashboard error');
+          dashboardCache.data = j;
+          dashboardCache.fetchedAt = Date.now();
+          renderSummary(j.summary);
+          renderRecent(j.alerts || []);
+          if (currentTab === 'statements') renderStatements(j.months || []);
+        })
+        .catch((err) => {
+          showError("Couldn't refresh", err.message || String(err));
+          if (!dashboardCache.data) renderInlineError(err.message);
+        })
+        .finally(() => {
+          setRefreshSpinning(false);
+          dashboardLoadPromise = null;
+        });
+      return dashboardLoadPromise;
+    }
 
-        dashboardCache.data = { summary, entries };
-        dashboardCache.fetchedAt = Date.now();
-
-        renderSummary(summary);
-        renderRecent(entries);
-      } catch (err) {
-        showError("Couldn't refresh dashboard", err.message || String(err));
-        // Don't leave skeletons spinning forever — surface the failure inline.
-        if (!dashboardCache.data) {
-          Object.values(cardEls).forEach((card) => {
-            const v = card.querySelector('.summary-card-value');
-            v.textContent = '—';
-            v.classList.remove('coral');
-          });
-          cardEls.overdue.classList.remove('warn');
-          cardEls.overdue.querySelector('.summary-card-label').textContent = 'Overdue';
-          recentList.innerHTML =
-            `<div class="recent-empty">Couldn't load Activity.<br>`
-            + `<small style="color:var(--muted-soft);font-family:'JetBrains Mono',monospace;font-size:11px;">`
-            + escapeHtml(err.message || 'Tap refresh to retry.')
-            + '</small></div>';
-        }
-      } finally {
-        dashboardLoading = false;
-        setRefreshSpinning(false);
-      }
+    function renderInlineError(msg) {
+      Object.values(cardEls).forEach((card) => {
+        const v = card.querySelector('.summary-card-value');
+        v.textContent = '—';
+        v.classList.remove('coral');
+      });
+      cardEls.overdue.classList.remove('warn');
+      cardEls.overdue.querySelector('.summary-card-label').textContent = 'Overdue';
+      const html = `<div class="recent-empty">Couldn't load.<br>`
+        + `<small style="color:var(--muted-soft);font-family:'JetBrains Mono',monospace;font-size:11px;">`
+        + escapeHtml(msg || 'Tap refresh to retry.')
+        + '</small></div>';
+      recentList.innerHTML = html;
+      const sl = document.getElementById('statementsList');
+      if (sl) sl.innerHTML = html;
     }
 
     function setRefreshSpinning(on) {
@@ -2239,60 +2213,28 @@
     }
 
     // ============================================================
-    // STATEMENTS — month-by-month
+    // STATEMENTS — reads from the same dashboard cache, no extra fetch
     // ============================================================
-    const statementsCache = { months: null, fetchedAt: 0, entries: {} };
-    let statementsLoading = false;
+    const statementsList    = document.getElementById('statementsList');
+    const statementsRefresh = document.getElementById('statementsRefreshBtn');
 
-    const statementsList     = document.getElementById('statementsList');
-    const statementsRefresh  = document.getElementById('statementsRefreshBtn');
-
-    statementsRefresh.addEventListener('click', () => loadStatements(true));
-
-    function onShowStatements() {
-      const stale = !statementsCache.months ||
-                    (Date.now() - statementsCache.fetchedAt > CACHE_TTL_MS);
-      if (stale) loadStatements(false);
-    }
-
-    async function loadStatements(force) {
-      if (statementsLoading) return;
-      if (!force && statementsCache.months &&
-          (Date.now() - statementsCache.fetchedAt < CACHE_TTL_MS)) return;
-      if (!force && !navigator.onLine) {
-        if (!statementsCache.months) {
-          statementsList.innerHTML = '<div class="recent-offline">Connect to refresh</div>';
-        }
-        return;
-      }
-
-      statementsLoading = true;
+    statementsRefresh.addEventListener('click', () => {
       statementsRefresh.classList.add('spinning');
       statementsRefresh.disabled = true;
-
-      try {
-        const url = `${CONFIG.ENDPOINT}?action=months&token=${encodeURIComponent(CONFIG.TOKEN)}`;
-        const json = await fetchJson(url);
-        if (!json.ok) throw new Error(json.error || 'Months error');
-
-        statementsCache.months = json.months || [];
-        statementsCache.fetchedAt = Date.now();
-        // A refresh invalidates per-month entry caches so reopening pulls fresh.
-        statementsCache.entries = {};
-        renderStatements(statementsCache.months);
-      } catch (err) {
-        showError("Couldn't load statements", err.message || String(err));
-        if (!statementsCache.months) {
-          statementsList.innerHTML =
-            `<div class="recent-empty">Couldn't load Statements.<br>`
-            + `<small style="color:var(--muted-soft);font-family:'JetBrains Mono',monospace;font-size:11px;">`
-            + escapeHtml(err.message || 'Tap refresh to retry.')
-            + '</small></div>';
-        }
-      } finally {
-        statementsLoading = false;
+      loadDashboard(true).then(() => {
         statementsRefresh.classList.remove('spinning');
         statementsRefresh.disabled = false;
+        if (dashboardCache.data) renderStatements(dashboardCache.data.months || []);
+      });
+    });
+
+    function onShowStatements() {
+      if (dashboardCache.data) {
+        renderStatements(dashboardCache.data.months || []);
+        // Refresh in the background if the cache is stale.
+        if (Date.now() - dashboardCache.fetchedAt > CACHE_TTL_MS) loadDashboard(false);
+      } else {
+        loadDashboard(false);
       }
     }
 
@@ -2374,35 +2316,15 @@
       const open = card.classList.toggle('open');
       const head = card.querySelector('.month-card-head');
       if (head) head.setAttribute('aria-expanded', open ? 'true' : 'false');
-      if (open) {
-        const month = card.dataset.month;
-        const list  = card.querySelector('.month-entries .recent-list');
-        if (statementsCache.entries[month]) {
-          list.innerHTML = statementsCache.entries[month].map(recentRowHtml).join('') ||
-            '<div class="recent-empty">No entries.</div>';
-        } else {
-          list.innerHTML = '<div class="month-entries-loading">Loading entries…</div>';
-          loadMonthEntries(month, list);
-        }
-      }
-    }
-
-    async function loadMonthEntries(month, listEl) {
-      if (!navigator.onLine) {
-        listEl.innerHTML = '<div class="recent-offline">Connect to load entries</div>';
-        return;
-      }
-      try {
-        const url = `${CONFIG.ENDPOINT}?action=entries&token=${encodeURIComponent(CONFIG.TOKEN)}&month=${encodeURIComponent(month)}`;
-        const json = await fetchJson(url);
-        if (!json.ok) throw new Error(json.error || 'Entries error');
-        statementsCache.entries[month] = json.entries || [];
-        listEl.innerHTML = statementsCache.entries[month].map(recentRowHtml).join('') ||
-          '<div class="recent-empty">No entries.</div>';
-      } catch (err) {
-        listEl.innerHTML = `<div class="recent-empty"><small style="color:var(--muted-soft);font-family:'JetBrains Mono',monospace;font-size:11px;">${escapeHtml(err.message || 'Failed to load entries')}</small></div>`;
-        showError("Couldn't load month entries", err.message || String(err));
-      }
+      if (!open) return;
+      // Filter from the in-memory all-entries list — instant, no network.
+      const month = card.dataset.month;
+      const list  = card.querySelector('.month-entries .recent-list');
+      const all   = (dashboardCache.data && dashboardCache.data.allEntries) || [];
+      const items = all.filter((e) => e.paymentDate && e.paymentDate.slice(0, 7) === month);
+      list.innerHTML = items.length
+        ? items.map(recentRowHtml).join('')
+        : '<div class="recent-empty">No entries.</div>';
     }
 
     function receiptPill(receipt) {
