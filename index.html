@@ -1523,7 +1523,7 @@
          FOOTER (shared)
          ============================================================ -->
     <footer class="footer">
-      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v11</p>
+      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v12</p>
     </footer>
 
   </div>
@@ -1774,12 +1774,9 @@
         const result = await res.json();
 
         if (result.ok) {
-          // Single cache now powers both Activity and Statements; bust it
-          // (in-memory + localStorage) so the freshly logged Pending entry
-          // shows up on next tab open.
+          // Bust the dashboard cache so the freshly logged entry shows up
+          // next time the user opens Activity or Statements.
           dashboardCache.data = null;
-          dashboardCache.fetchedAt = 0;
-          try { localStorage.removeItem(LS_DASHBOARD_KEY); } catch (e) {}
           handleSuccess();
         } else {
           showError('Server rejected the entry', result.error || 'Unknown error from backend.');
@@ -1965,35 +1962,10 @@
     });
 
     // ============================================================
-    // DASHBOARD — single fetch powers Activity AND Statements
+    // DASHBOARD — fetch and render Activity + Statements
     // ============================================================
-    const CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
-    const LS_DASHBOARD_KEY = 'cubico-pay-dash-v1';
-    const dashboardCache = { data: null, fetchedAt: 0 };
-    let dashboardLoadPromise = null;
-
-    // Stale-while-revalidate via localStorage. Apps Script GETs cost ~1.5–3s
-    // on mobile cellular even on a warm script, so we always paint cached
-    // data first and only spin while fetching fresh in the background.
-    function persistDashboard() {
-      try {
-        localStorage.setItem(LS_DASHBOARD_KEY, JSON.stringify({
-          data: dashboardCache.data,
-          fetchedAt: dashboardCache.fetchedAt
-        }));
-      } catch (e) { /* quota / private mode */ }
-    }
-    (function hydrateDashboard() {
-      try {
-        const raw = localStorage.getItem(LS_DASHBOARD_KEY);
-        if (!raw) return;
-        const obj = JSON.parse(raw);
-        if (obj && obj.data && obj.fetchedAt) {
-          dashboardCache.data = obj.data;
-          dashboardCache.fetchedAt = obj.fetchedAt;
-        }
-      } catch (e) { /* corrupt — ignore */ }
-    })();
+    const dashboardCache = { data: null };
+    let dashboardLoading = false;
 
     // ============================================================
     // ONLINE / OFFLINE
@@ -2001,8 +1973,6 @@
     function updateOnlineStatus() {
       if (navigator.onLine) {
         offlineBar.classList.remove('visible');
-        // If the user is on Activity and we never got data, try again now.
-        if (currentTab === 'activity' && !dashboardCache.data) loadDashboard(true);
       } else {
         offlineBar.classList.add('visible');
       }
@@ -2012,54 +1982,15 @@
     window.addEventListener('offline', updateOnlineStatus);
     updateOnlineStatus();
 
-    // If we already hydrated something from localStorage and Activity is the
-    // active tab, paint it immediately so the user sees real data instead of
-    // skeletons while the network refresh happens in the background.
-    if (dashboardCache.data) {
-      if (currentTab === 'activity') {
-        renderSummary(dashboardCache.data.summary);
-        renderRecent(dashboardCache.data.alerts || []);
-      } else if (currentTab === 'statements') {
-        renderStatements(dashboardCache.data.months || []);
-      }
-    }
-
-    // Kick off a background refresh on app open so the cache is fresh by
-    // the time the user taps a tab.
-    if (navigator.onLine) loadDashboard(false);
+    // Fetch the dashboard up front so data is ready by the time the user
+    // taps Activity or Statements.
+    if (navigator.onLine) loadDashboard();
 
     const refreshBtn  = document.getElementById('refreshBtn');
     const summaryGrid = document.getElementById('summaryGrid');
     const recentList  = document.getElementById('recentList');
 
-    refreshBtn.addEventListener('click', () => loadDashboard(true));
-
-    // Fail fast on flaky mobile networks (12s) instead of leaving skeletons.
-    // iOS Safari/PWA can ignore AbortController across cross-origin
-    // redirects, leaving fetches hung forever. Race the fetch against an
-    // explicit timer that always rejects so the caller never stalls.
-    function fetchJson(url, ms) {
-      const controller = new AbortController();
-      const timeout = ms || 12000;
-
-      const fetchPromise = fetch(url, {
-        redirect: 'follow',
-        signal: controller.signal,
-        cache: 'no-store'
-      }).then(async (res) => {
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        return res.json();
-      });
-
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => {
-          try { controller.abort(); } catch (e) { /* noop */ }
-          reject(new Error('Request timed out'));
-        }, timeout);
-      });
-
-      return Promise.race([fetchPromise, timeoutPromise]);
-    }
+    refreshBtn.addEventListener('click', () => loadDashboard());
 
     // Click / keyboard to toggle a row's expanded detail.
     recentList.addEventListener('click', (ev) => toggleRowFromEvent(ev));
@@ -2081,50 +2012,45 @@
     }
 
     function onShowActivity() {
-      // Render whatever's cached immediately — even if old. Refresh silently.
       if (dashboardCache.data) {
         renderSummary(dashboardCache.data.summary);
         renderRecent(dashboardCache.data.alerts || []);
-        if (Date.now() - dashboardCache.fetchedAt > CACHE_TTL_MS) loadDashboard(false);
       } else {
-        loadDashboard(false);
+        loadDashboard();
       }
     }
 
-    function loadDashboard(force) {
-      // Coalesce so a tab-switch + auto refresh don't double-fire. But a
-      // user-initiated force (Refresh tap) must always be allowed through —
-      // otherwise a hung iOS fetch leaves the dashboard permanently stuck.
-      if (dashboardLoadPromise && !force) return dashboardLoadPromise;
-      if (!force && dashboardCache.data &&
-          (Date.now() - dashboardCache.fetchedAt < CACHE_TTL_MS)) return Promise.resolve();
-      // navigator.onLine lies on iOS PWA mode — only respect it for auto loads.
-      if (!force && !navigator.onLine) { renderOffline(); return Promise.resolve(); }
-
+    async function loadDashboard() {
+      if (dashboardLoading) return;
+      dashboardLoading = true;
       setRefreshSpinning(true);
-
-      // Cache-buster — iOS PWA standalone sometimes serves a stale 302 from
-      // disk and never reaches the live backend.
       const url = `${CONFIG.ENDPOINT}?action=dashboard&token=${encodeURIComponent(CONFIG.TOKEN)}&_=${Date.now()}`;
-      dashboardLoadPromise = fetchJson(url)
-        .then((j) => {
-          if (!j.ok) throw new Error(j.error || 'Dashboard error');
-          dashboardCache.data = j;
-          dashboardCache.fetchedAt = Date.now();
-          persistDashboard();
-          renderSummary(j.summary);
-          renderRecent(j.alerts || []);
-          if (currentTab === 'statements') renderStatements(j.months || []);
-        })
-        .catch((err) => {
-          showError("Couldn't refresh", err.message || String(err));
-          if (!dashboardCache.data) renderInlineError(err.message);
-        })
-        .finally(() => {
-          setRefreshSpinning(false);
-          dashboardLoadPromise = null;
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 20000);
+        const res = await fetch(url, {
+          signal: controller.signal,
+          redirect: 'follow',
+          cache: 'no-store'
         });
-      return dashboardLoadPromise;
+        clearTimeout(timer);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const j = await res.json();
+        if (!j.ok) throw new Error(j.error || 'Dashboard error');
+        dashboardCache.data = j;
+        renderSummary(j.summary);
+        renderRecent(j.alerts || []);
+        renderStatements(j.months || []);
+      } catch (err) {
+        const msg = (err && err.name === 'AbortError')
+          ? 'Request timed out — check your connection.'
+          : (err && err.message) || String(err);
+        showError("Couldn't load data", msg);
+        renderInlineError(msg);
+      } finally {
+        dashboardLoading = false;
+        setRefreshSpinning(false);
+      }
     }
 
     function renderInlineError(msg) {
@@ -2147,6 +2073,11 @@
     function setRefreshSpinning(on) {
       refreshBtn.classList.toggle('spinning', on);
       refreshBtn.disabled = on;
+      const stmts = document.getElementById('statementsRefreshBtn');
+      if (stmts) {
+        stmts.classList.toggle('spinning', on);
+        stmts.disabled = on;
+      }
     }
 
     // ---------- Rendering ----------
@@ -2277,23 +2208,13 @@
     const statementsList    = document.getElementById('statementsList');
     const statementsRefresh = document.getElementById('statementsRefreshBtn');
 
-    statementsRefresh.addEventListener('click', () => {
-      statementsRefresh.classList.add('spinning');
-      statementsRefresh.disabled = true;
-      loadDashboard(true).then(() => {
-        statementsRefresh.classList.remove('spinning');
-        statementsRefresh.disabled = false;
-        if (dashboardCache.data) renderStatements(dashboardCache.data.months || []);
-      });
-    });
+    statementsRefresh.addEventListener('click', () => loadDashboard());
 
     function onShowStatements() {
       if (dashboardCache.data) {
         renderStatements(dashboardCache.data.months || []);
-        // Refresh in the background if the cache is stale.
-        if (Date.now() - dashboardCache.fetchedAt > CACHE_TTL_MS) loadDashboard(false);
       } else {
-        loadDashboard(false);
+        loadDashboard();
       }
     }
 
