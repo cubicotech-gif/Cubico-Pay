@@ -1,7 +1,7 @@
 /**
  * CUBICO PAY — APPS SCRIPT BACKEND
  * ============================================
- * Last modified: 2026-05-02 (column N actual-USD-received; alerts endpoint; Pending-by-default flow)
+ * Last modified: 2026-05-02 (single dashboard endpoint with CacheService — fast mobile loads)
  *
  * Receives POST requests from the Cubico Pay PWA, validates the shared
  * secret, and writes the payment entry directly into the "Payments Log"
@@ -33,12 +33,12 @@ const SHEET_NAME = 'Payments Log';
  * GET handler. Dispatches on ?action=...
  *
  *   (none) | ?action=health   → public health check, no auth
- *   ?action=summary&token=…   → aggregated metrics for the dashboard
- *   ?action=recent&token=…    → latest entries by Entry Date desc
- *   ?action=months&token=…    → per-month aggregates (newest first)
- *   ?action=entries&token=…   → all entries; optional &month=YYYY-MM filter
- *   ?action=alerts&token=…    → entries needing attention (not Confirmed
- *                               or not Paid); newest first
+ *   ?action=dashboard&token=… → everything the PWA needs in one shot:
+ *                               {summary, alerts, months, allEntries}
+ *
+ * The dashboard response is memoised in CacheService for 30 seconds, so
+ * repeated taps from the phone don't repeatedly scan the sheet. doPost()
+ * busts the cache so a freshly logged payment is visible immediately.
  *
  * Token is passed as a query param because Apps Script GET handlers
  * cannot read custom request headers reliably.
@@ -61,25 +61,9 @@ function doGet(e) {
   }
 
   try {
-    if (action === 'summary') return jsonResponse({ ok: true, summary: buildSummary() });
-
-    if (action === 'recent') {
-      const rawLimit = parseInt(e.parameter.limit, 10);
-      const limit = isNaN(rawLimit) ? 10 : Math.max(1, Math.min(50, rawLimit));
-      return jsonResponse({ ok: true, entries: buildRecent(limit) });
-    }
-
-    if (action === 'months') {
-      return jsonResponse({ ok: true, months: buildMonths() });
-    }
-
-    if (action === 'entries') {
-      const month = e.parameter.month || '';
-      return jsonResponse({ ok: true, month: month || null, entries: buildEntries(month) });
-    }
-
-    if (action === 'alerts') {
-      return jsonResponse({ ok: true, entries: buildAlerts() });
+    if (action === 'dashboard') {
+      const data = getDashboardCached_();
+      return jsonResponse(Object.assign({ ok: true }, data));
     }
 
     return jsonResponse({ ok: false, error: `Unknown action: ${action}` });
@@ -178,6 +162,9 @@ function doPost(e) {
     sheet.getRange(targetRow, 3).setNumberFormat('$#,##0.00');
     sheet.getRange(targetRow, 13).setNumberFormat('yyyy-mm-dd');
 
+    // Invalidate the dashboard cache so the new entry is visible right away.
+    try { CacheService.getScriptCache().remove('dashboard_v1'); } catch (e) { /* non-fatal */ }
+
     return jsonResponse({
       ok: true,
       row: targetRow,
@@ -244,103 +231,88 @@ function isNumeric_(v) {
   return typeof v === 'number' && !isNaN(v);
 }
 
-function buildSummary() {
+/**
+ * Single sheet read → {summary, alerts, months, allEntries}.
+ * Cached in CacheService for 30s so repeated taps from the phone don't
+ * re-scan the sheet. doPost busts the cache on a successful write.
+ */
+function getDashboardCached_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get('dashboard_v1');
+  if (cached) return JSON.parse(cached);
+  const data = buildDashboard_();
+  try { cache.put('dashboard_v1', JSON.stringify(data), 30); } catch (e) { /* non-fatal */ }
+  return data;
+}
+
+function buildDashboard_() {
   const rows = readFilledRows_();
   const tz = Session.getScriptTimeZone();
-  const now = new Date();
-  const thisMonth = Utilities.formatDate(now, tz, 'yyyy-MM');
+  const thisMonth = Utilities.formatDate(new Date(), tz, 'yyyy-MM');
 
   let totalUnpaidPKR = 0;
   let totalReceivedUSDThisMonth = 0;
   let overdueCount = 0;
   let pendingReceiptsCount = 0;
 
+  const buckets = {};   // 'YYYY-MM' → month aggregate
+  const alerts = [];    // entries needing attention
+
   for (const r of rows) {
-    const roeSet = isNumeric_(r.roe) && r.roe > 0;
+    const roeSet   = isNumeric_(r.roe) && r.roe > 0;
+    const isPaid   = r.paidStatus === 'Paid';
     const isUnpaid = r.paidStatus === 'Unpaid';
+    const usdForBucket = isNumeric_(r.actualUsdAmount) ? r.actualUsdAmount : r.usdAmount;
 
-    if (isUnpaid && roeSet && isNumeric_(r.finalPKR)) {
-      totalUnpaidPKR += r.finalPKR;
-    }
-
-    if (isUnpaid && roeSet && isNumeric_(r.daysSince) && r.daysSince > 10) {
-      overdueCount += 1;
-    }
-
+    // Top-of-app summary metrics
+    if (isUnpaid && roeSet && isNumeric_(r.finalPKR)) totalUnpaidPKR += r.finalPKR;
+    if (isUnpaid && roeSet && isNumeric_(r.daysSince) && r.daysSince > 10) overdueCount += 1;
     if (r.receipt === 'Pending') pendingReceiptsCount += 1;
 
-    // Prefer actual USD received (col N) when filled; fall back to the
-    // sender's claim so freshly logged but not-yet-verified entries still
-    // contribute a tentative figure.
-    const usdForMonth = isNumeric_(r.actualUsdAmount) ? r.actualUsdAmount : r.usdAmount;
-    if (r.paymentDate instanceof Date && isNumeric_(usdForMonth)) {
+    if (r.paymentDate instanceof Date) {
       const ym = Utilities.formatDate(r.paymentDate, tz, 'yyyy-MM');
-      if (ym === thisMonth) totalReceivedUSDThisMonth += usdForMonth;
+      if (ym === thisMonth && isNumeric_(usdForBucket)) {
+        totalReceivedUSDThisMonth += usdForBucket;
+      }
+
+      // Per-month bucket
+      let b = buckets[ym];
+      if (!b) {
+        b = buckets[ym] = {
+          month: ym,
+          label: Utilities.formatDate(r.paymentDate, tz, 'MMMM yyyy'),
+          count: 0, totalUSD: 0, totalFinalPKR: 0, outstandingPKR: 0,
+          paidCount: 0, unpaidCount: 0, overdueCount: 0,
+          roeSum: 0, roeCount: 0
+        };
+      }
+      b.count += 1;
+      if (isNumeric_(usdForBucket)) b.totalUSD += usdForBucket;
+      if (isNumeric_(r.finalPKR))   b.totalFinalPKR += r.finalPKR;
+      if (isPaid) b.paidCount += 1; else b.unpaidCount += 1;
+      if (!isPaid && isNumeric_(r.finalPKR) && roeSet) b.outstandingPKR += r.finalPKR;
+      if (!isPaid && isNumeric_(r.daysSince) && r.daysSince > 10 && roeSet) b.overdueCount += 1;
+      if (roeSet) { b.roeSum += r.roe; b.roeCount += 1; }
     }
+
+    // Worklist
+    if (r.receipt !== 'Confirmed' || !isPaid) alerts.push(r);
   }
 
-  return {
-    totalUnpaidPKR: round2_(totalUnpaidPKR),
-    totalReceivedUSDThisMonth: round2_(totalReceivedUSDThisMonth),
-    overdueCount: overdueCount,
-    pendingReceiptsCount: pendingReceiptsCount,
-    totalEntries: rows.length
+  // Order alerts and allEntries by payment date desc; entry date as tiebreaker.
+  const byPaymentDateDesc = (a, b) => {
+    const pa = a.paymentDate instanceof Date ? a.paymentDate.getTime() : -Infinity;
+    const pb = b.paymentDate instanceof Date ? b.paymentDate.getTime() : -Infinity;
+    if (pb !== pa) return pb - pa;
+    const ea = a.entryDate instanceof Date ? a.entryDate.getTime() : -Infinity;
+    const eb = b.entryDate instanceof Date ? b.entryDate.getTime() : -Infinity;
+    return eb - ea;
   };
-}
+  alerts.sort(byPaymentDateDesc);
+  const allEntries = rows.slice().sort(byPaymentDateDesc);
 
-function buildRecent(limit) {
-  const rows = readFilledRows_();
-  sortByEntryDateDesc_(rows);
-  return rows.slice(0, limit).map(serializeEntry_);
-}
-
-/**
- * Per-month aggregates, newest first. Buckets by Payment Received Date.
- */
-function buildMonths() {
-  const rows = readFilledRows_();
-  const tz = Session.getScriptTimeZone();
-  const buckets = {}; // 'YYYY-MM' → aggregate
-
-  for (const r of rows) {
-    if (!(r.paymentDate instanceof Date)) continue;
-    const ym = Utilities.formatDate(r.paymentDate, tz, 'yyyy-MM');
-    let b = buckets[ym];
-    if (!b) {
-      b = buckets[ym] = {
-        month: ym,
-        label: Utilities.formatDate(r.paymentDate, tz, 'MMMM yyyy'),
-        count: 0,
-        totalUSD: 0,
-        totalFinalPKR: 0,
-        outstandingPKR: 0,
-        paidCount: 0,
-        unpaidCount: 0,
-        overdueCount: 0,
-        roeSum: 0,
-        roeCount: 0
-      };
-    }
-    b.count += 1;
-    const usdForBucket = isNumeric_(r.actualUsdAmount) ? r.actualUsdAmount : r.usdAmount;
-    if (isNumeric_(usdForBucket))                 b.totalUSD += usdForBucket;
-    if (isNumeric_(r.finalPKR))                   b.totalFinalPKR += r.finalPKR;
-    if (r.paidStatus === 'Paid')                  b.paidCount += 1;
-    else                                          b.unpaidCount += 1; // blank counted as unpaid
-    if (r.paidStatus !== 'Paid' && isNumeric_(r.finalPKR) && isNumeric_(r.roe) && r.roe > 0) {
-      b.outstandingPKR += r.finalPKR;
-    }
-    if (r.paidStatus !== 'Paid' && isNumeric_(r.daysSince) && r.daysSince > 10 &&
-        isNumeric_(r.roe) && r.roe > 0) {
-      b.overdueCount += 1;
-    }
-    if (isNumeric_(r.roe) && r.roe > 0) {
-      b.roeSum += r.roe;
-      b.roeCount += 1;
-    }
-  }
-
-  const out = Object.values(buckets).map((b) => ({
+  // Months: newest first.
+  const months = Object.values(buckets).map((b) => ({
     month: b.month,
     label: b.label,
     count: b.count,
@@ -351,46 +323,20 @@ function buildMonths() {
     unpaidCount: b.unpaidCount,
     overdueCount: b.overdueCount,
     avgRoe: b.roeCount > 0 ? round2_(b.roeSum / b.roeCount) : ''
-  }));
+  })).sort((a, b) => (a.month < b.month ? 1 : a.month > b.month ? -1 : 0));
 
-  out.sort((a, b) => (a.month < b.month ? 1 : a.month > b.month ? -1 : 0));
-  return out;
-}
-
-/**
- * All entries, optionally filtered to a specific YYYY-MM payment month.
- * Sorted by Payment Received Date desc, then Entry Date desc.
- */
-function buildEntries(month) {
-  const rows = readFilledRows_();
-  const tz = Session.getScriptTimeZone();
-
-  let filtered = rows;
-  if (month) {
-    filtered = rows.filter((r) =>
-      r.paymentDate instanceof Date &&
-      Utilities.formatDate(r.paymentDate, tz, 'yyyy-MM') === month
-    );
-  }
-
-  filtered.sort((a, b) => {
-    const pa = a.paymentDate instanceof Date ? a.paymentDate.getTime() : -Infinity;
-    const pb = b.paymentDate instanceof Date ? b.paymentDate.getTime() : -Infinity;
-    if (pb !== pa) return pb - pa;
-    const ea = a.entryDate instanceof Date ? a.entryDate.getTime() : -Infinity;
-    const eb = b.entryDate instanceof Date ? b.entryDate.getTime() : -Infinity;
-    return eb - ea;
-  });
-
-  return filtered.map(serializeEntry_);
-}
-
-function sortByEntryDateDesc_(rows) {
-  rows.sort((a, b) => {
-    const ta = a.entryDate instanceof Date ? a.entryDate.getTime() : -Infinity;
-    const tb = b.entryDate instanceof Date ? b.entryDate.getTime() : -Infinity;
-    return tb - ta;
-  });
+  return {
+    summary: {
+      totalUnpaidPKR: round2_(totalUnpaidPKR),
+      totalReceivedUSDThisMonth: round2_(totalReceivedUSDThisMonth),
+      overdueCount: overdueCount,
+      pendingReceiptsCount: pendingReceiptsCount,
+      totalEntries: rows.length
+    },
+    alerts: alerts.map(serializeEntry_),
+    months: months,
+    allEntries: allEntries.map(serializeEntry_)
+  };
 }
 
 /**
@@ -418,22 +364,6 @@ function serializeEntry_(r) {
     batchRef: r.batchRef || '',
     roe: isNumeric_(r.roe) ? r.roe : ''
   };
-}
-
-/**
- * Worklist for the Activity tab. Anything that hasn't been Confirmed and
- * Paid yet — sorted newest-payment-date first.
- */
-function buildAlerts() {
-  const rows = readFilledRows_();
-  rows.sort((a, b) => {
-    const ta = a.paymentDate instanceof Date ? a.paymentDate.getTime() : -Infinity;
-    const tb = b.paymentDate instanceof Date ? b.paymentDate.getTime() : -Infinity;
-    return tb - ta;
-  });
-  return rows
-    .filter((r) => r.receipt !== 'Confirmed' || r.paidStatus !== 'Paid')
-    .map(serializeEntry_);
 }
 
 function round2_(n) {
