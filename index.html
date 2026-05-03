@@ -1520,10 +1520,49 @@
     </section>
 
     <!-- ============================================================
+         PAYOUTS VIEW — settled payments grouped by batch
+         ============================================================ -->
+    <section class="view" id="payoutsView" role="tabpanel" aria-labelledby="tabPayouts">
+
+      <div class="title-block">
+        <div class="eyebrow">Payouts</div>
+        <h1>Settled <em>batches</em></h1>
+        <p class="subtitle">Every payment you've cleared, grouped by batch reference and the date it was paid.</p>
+      </div>
+
+      <div class="recent-section">
+        <div class="recent-section-header">
+          <span class="recent-section-title">All batches</span>
+          <button class="refresh-btn" id="payoutsRefreshBtn" type="button" aria-label="Refresh payouts">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+              <path d="M12.5 2v3.5H9M1.5 12V8.5H5M11.5 5A4.5 4.5 0 0 0 3.2 4M2.5 9A4.5 4.5 0 0 0 10.8 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+        <div class="statements-list" id="payoutsList">
+          <div class="month-card">
+            <div class="month-card-head">
+              <div class="month-card-title">
+                <span class="month-name"><span class="skeleton">Loading batch</span></span>
+                <span class="month-count"><span class="skeleton">00 entries</span></span>
+              </div>
+              <div class="month-stats">
+                <div><div class="month-stat-key">USD</div><div class="month-stat-val"><span class="skeleton">$0,000</span></div></div>
+                <div><div class="month-stat-key">PKR</div><div class="month-stat-val"><span class="skeleton">₨000,000</span></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ============================================================
          FOOTER (shared)
          ============================================================ -->
     <footer class="footer">
-      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v14</p>
+      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v15</p>
     </footer>
 
   </div>
@@ -1552,6 +1591,13 @@
         <path d="M9 12h7M9 16h7M9 8h2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
       </svg>
       <span>Statements</span>
+    </button>
+    <button class="tab" id="tabPayouts" type="button" role="tab" aria-selected="false" aria-controls="payoutsView" data-tab="payouts">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M8 12.5l2.5 2.5L16 9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>Payouts</span>
     </button>
   </nav>
 
@@ -1685,6 +1731,7 @@
       log:        document.getElementById('logView'),
       activity:   document.getElementById('activityView'),
       statements: document.getElementById('statementsView'),
+      payouts:    document.getElementById('payoutsView'),
     };
     let currentTab = 'log';
 
@@ -1699,6 +1746,7 @@
       try { localStorage.setItem(ACTIVE_TAB_KEY, name); } catch (e) { /* private mode */ }
       if (name === 'activity'   && typeof onShowActivity   === 'function') onShowActivity();
       if (name === 'statements' && typeof onShowStatements === 'function') onShowStatements();
+      if (name === 'payouts'    && typeof onShowPayouts    === 'function') onShowPayouts();
     }
 
     tabButtons.forEach((btn) => {
@@ -1709,7 +1757,7 @@
     // first (onShow* callbacks reference state defined later in the script).
     try {
       const saved = localStorage.getItem(ACTIVE_TAB_KEY);
-      if (saved === 'activity' || saved === 'statements') {
+      if (saved === 'activity' || saved === 'statements' || saved === 'payouts') {
         setTimeout(() => switchTab(saved), 0);
       }
     } catch (e) { /* private mode */ }
@@ -2042,6 +2090,7 @@
         renderSummary(j.summary);
         renderRecent(j.alerts || []);
         renderStatements(j.months || []);
+        renderPayouts(j.payouts || []);
       } catch (err) {
         const msg = (err && err.name === 'AbortError')
           ? 'Request timed out — check your connection.'
@@ -2078,6 +2127,11 @@
       if (stmts) {
         stmts.classList.toggle('spinning', on);
         stmts.disabled = on;
+      }
+      const payouts = document.getElementById('payoutsRefreshBtn');
+      if (payouts) {
+        payouts.classList.toggle('spinning', on);
+        payouts.disabled = on;
       }
     }
 
@@ -2180,6 +2234,7 @@
         cell_('Sender (actual)',   e.actualSenderName || '', '', /* full */ true),
         cell_('Receipt',           e.receipt || ''),
         cell_('Paid status',       e.paidStatus || 'Unpaid'),
+        cell_('Paid on',           e.paidDate ? formatDate(e.paidDate) : '', 'mono'),
         cell_('Batch ref',         e.batchRef || '', 'mono', /* full */ true),
       ];
       return `<div class="detail-grid">${cells.join('')}</div>`;
@@ -2296,6 +2351,94 @@
       const list  = card.querySelector('.month-entries .recent-list');
       const all   = (dashboardCache.data && dashboardCache.data.allEntries) || [];
       const items = all.filter((e) => e.paymentDate && e.paymentDate.slice(0, 7) === month);
+      list.innerHTML = items.length
+        ? items.map(recentRowHtml).join('')
+        : '<div class="recent-empty">No entries.</div>';
+    }
+
+    // ============================================================
+    // PAYOUTS — settled batches grouped by batch ref + paid date
+    // ============================================================
+    const payoutsList    = document.getElementById('payoutsList');
+    const payoutsRefresh = document.getElementById('payoutsRefreshBtn');
+
+    payoutsRefresh.addEventListener('click', () => loadDashboard());
+
+    function onShowPayouts() {
+      if (dashboardCache.data) {
+        renderPayouts(dashboardCache.data.payouts || []);
+      } else {
+        loadDashboard();
+      }
+    }
+
+    function renderPayouts(batches) {
+      if (!batches || batches.length === 0) {
+        payoutsList.innerHTML =
+          '<div class="recent-empty">Nothing settled yet — once you mark a payment as Paid in the sheet, the batch shows up here.</div>';
+        return;
+      }
+      payoutsList.innerHTML = batches.map(batchCardHtml).join('');
+    }
+
+    function batchCardHtml(b) {
+      const dateChip = b.paidDate
+        ? `<span class="month-status-chip paid"><span class="month-status-chip-dot"></span>Paid ${escapeHtml(b.multipleDates ? b.paidDateRange : b.paidDateLabel || b.paidDate)}</span>`
+        : `<span class="month-status-chip unpaid"><span class="month-status-chip-dot"></span>No paid date</span>`;
+      const safeKey = encodeURIComponent(b.batchRef);
+
+      return ''
+        + `<div class="month-card" data-batch="${safeKey}">`
+        +   '<div class="month-card-head" role="button" tabindex="0" aria-expanded="false">'
+        +     '<div class="month-card-title">'
+        +       `<span class="month-name">${escapeHtml(b.batchRef)}</span>`
+        +       `<span class="month-count">${b.count} ${b.count === 1 ? 'entry' : 'entries'}</span>`
+        +     '</div>'
+        +     '<div class="month-stats">'
+        +       `<div><div class="month-stat-key">USD paid out</div><div class="month-stat-val">${formatUSD0(b.totalUSD)}</div></div>`
+        +       `<div><div class="month-stat-key">PKR paid out</div><div class="month-stat-val">${formatPKR(b.totalFinalPKR)}</div></div>`
+        +     '</div>'
+        +     `<div class="month-status-line">${dateChip}</div>`
+        +     '<div class="month-toggle">'
+        +       '<span>View entries</span>'
+        +       '<svg class="month-toggle-caret" viewBox="0 0 12 8" fill="none" aria-hidden="true">'
+        +         '<path d="M1 1.5l5 5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
+        +       '</svg>'
+        +     '</div>'
+        +   '</div>'
+        +   '<div class="month-entries"><div class="recent-list"></div></div>'
+        + '</div>';
+    }
+
+    payoutsList.addEventListener('click', (ev) => togglePayoutFromEvent(ev));
+    payoutsList.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter' && ev.key !== ' ') return;
+      const row = ev.target.closest('.recent-row');
+      if (row) { ev.preventDefault(); toggleRow(row); return; }
+      const head = ev.target.closest('.month-card-head');
+      if (!head) return;
+      ev.preventDefault();
+      togglePayout(head.parentElement);
+    });
+
+    function togglePayoutFromEvent(ev) {
+      const row = ev.target.closest('.recent-row');
+      if (row) { toggleRow(row); return; }
+      const card = ev.target.closest('.month-card');
+      if (!card) return;
+      togglePayout(card);
+    }
+
+    function togglePayout(card) {
+      const open = card.classList.toggle('open');
+      const head = card.querySelector('.month-card-head');
+      if (head) head.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (!open) return;
+      const batchKey = decodeURIComponent(card.dataset.batch);
+      const batches = (dashboardCache.data && dashboardCache.data.payouts) || [];
+      const found = batches.find((x) => x.batchRef === batchKey);
+      const list = card.querySelector('.month-entries .recent-list');
+      const items = (found && found.entries) || [];
       list.innerHTML = items.length
         ? items.map(recentRowHtml).join('')
         : '<div class="recent-empty">No entries.</div>';
