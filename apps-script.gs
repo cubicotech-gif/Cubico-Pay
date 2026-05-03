@@ -195,11 +195,11 @@ function readFilledRows_() {
   const maxRows = sheet.getMaxRows();
   if (maxRows < 2) return [];
 
-  // Columns N (actual USD received) and O (actual sender name) are
-  // optional — older sheets may not have them yet. Read them when present,
-  // otherwise fall back to 13 columns.
+  // Columns N (actual USD received), O (actual sender name) and P (paid
+  // date, auto-stamped by onEdit) are all optional — older sheets may not
+  // have them yet. Read them when present, otherwise fall back gracefully.
   const maxCols = sheet.getMaxColumns();
-  const readCols = Math.max(13, Math.min(15, maxCols));
+  const readCols = Math.max(13, Math.min(16, maxCols));
 
   const values = sheet.getRange(2, 1, maxRows - 1, readCols).getValues();
   const rows = [];
@@ -223,7 +223,8 @@ function readFilledRows_() {
       roe:              r[11],  // number or ''
       entryDate:        r[12],  // Date | ''
       actualUsdAmount:  readCols >= 14 ? r[13] : '',
-      actualSenderName: readCols >= 15 ? r[14] : ''
+      actualSenderName: readCols >= 15 ? r[14] : '',
+      paidDate:         readCols >= 16 ? r[15] : ''   // Date | ''
     });
   }
   return rows;
@@ -337,8 +338,78 @@ function buildDashboard_() {
     },
     alerts: alerts.map(serializeEntry_),
     months: months,
+    payouts: buildPayouts_(rows),
     allEntries: allEntries.map(serializeEntry_)
   };
+}
+
+/**
+ * Group every Paid entry by batch ref. Empty batch ref → single
+ * "(no batch)" bucket. Sorted by latest paid date desc.
+ */
+function buildPayouts_(rows) {
+  const tz = Session.getScriptTimeZone();
+  const buckets = {};
+
+  for (const r of rows) {
+    if (r.paidStatus !== 'Paid') continue;
+    const key = (r.batchRef && String(r.batchRef).trim()) || '(no batch)';
+    let b = buckets[key];
+    if (!b) {
+      b = buckets[key] = {
+        batchRef: key,
+        count: 0,
+        totalUSD: 0,
+        totalFinalPKR: 0,
+        paidDates: {},     // 'yyyy-MM-dd' set
+        latestPaid: null,  // Date
+        entries: []
+      };
+    }
+    b.count += 1;
+    const usd = isNumeric_(r.actualUsdAmount) ? r.actualUsdAmount
+              : (isNumeric_(r.usdAmount) ? r.usdAmount : 0);
+    b.totalUSD += usd;
+    if (isNumeric_(r.finalPKR)) b.totalFinalPKR += r.finalPKR;
+    if (r.paidDate instanceof Date) {
+      b.paidDates[Utilities.formatDate(r.paidDate, tz, 'yyyy-MM-dd')] = true;
+      if (!b.latestPaid || r.paidDate.getTime() > b.latestPaid.getTime()) {
+        b.latestPaid = r.paidDate;
+      }
+    }
+    b.entries.push(r);
+  }
+
+  const result = Object.keys(buckets).map((key) => {
+    const b = buckets[key];
+    const dates = Object.keys(b.paidDates).sort();
+    const paidDate = dates.length > 0 ? dates[dates.length - 1] : '';
+    const paidDateLabel = b.latestPaid
+      ? Utilities.formatDate(b.latestPaid, tz, 'd MMM yyyy')
+      : '';
+    return {
+      batchRef: b.batchRef,
+      paidDate: paidDate,
+      paidDateLabel: paidDateLabel,
+      paidDateRange: dates.length > 1 ? (dates[0] + ' → ' + dates[dates.length - 1]) : paidDate,
+      multipleDates: dates.length > 1,
+      count: b.count,
+      totalUSD: round2_(b.totalUSD),
+      totalFinalPKR: round2_(b.totalFinalPKR),
+      entries: b.entries.map(serializeEntry_)
+    };
+  });
+
+  // Latest paid date first; batches with no paid date sink to the bottom.
+  result.sort((a, b) => {
+    if (a.paidDate && !b.paidDate) return -1;
+    if (!a.paidDate && b.paidDate) return 1;
+    if (a.paidDate < b.paidDate) return 1;
+    if (a.paidDate > b.paidDate) return -1;
+    return a.batchRef.localeCompare(b.batchRef);
+  });
+
+  return result;
 }
 
 /**
@@ -357,6 +428,8 @@ function serializeEntry_(r) {
     usdAmount: isNumeric_(r.usdAmount) ? round2_(r.usdAmount) : '',
     actualUsdAmount: isNumeric_(r.actualUsdAmount) ? round2_(r.actualUsdAmount) : '',
     actualSenderName: r.actualSenderName || '',
+    paidDate: r.paidDate instanceof Date
+      ? Utilities.formatDate(r.paidDate, tz, 'yyyy-MM-dd') : '',
     account: r.account || '',
     receipt: r.receipt || '',
     pkrAmount: isNumeric_(r.pkrAmount) ? round2_(r.pkrAmount) : '',
@@ -381,4 +454,54 @@ function jsonResponse(obj) {
   return ContentService
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ============================================
+// SIMPLE TRIGGERS
+// ============================================
+
+/**
+ * Watches column I (Paid status) of "Payments Log".
+ *
+ *   set to "Paid"  → stamp today's date into column P (Paid date),
+ *                    only if P is empty (don't clobber a manual fill)
+ *   anything else  → clear column P
+ *
+ * Also busts the dashboard CacheService entry so the change is visible
+ * on the next phone open without waiting 30s for the cache to expire.
+ *
+ * Runs as a SIMPLE trigger (no installation needed) — Apps Script wires
+ * any function literally named `onEdit` automatically.
+ */
+function onEdit(e) {
+  if (!e || !e.range) return;
+  const sheet = e.range.getSheet();
+  if (sheet.getName() !== SHEET_NAME) return;
+
+  const startCol = e.range.getColumn();
+  const endCol = startCol + e.range.getNumColumns() - 1;
+  // Only react when the edit overlaps column I (9) — Paid status
+  if (startCol > 9 || endCol < 9) return;
+
+  const startRow = e.range.getRow();
+  const numRows = e.range.getNumRows();
+  const today = new Date();
+
+  for (let i = 0; i < numRows; i++) {
+    const row = startRow + i;
+    if (row < 2) continue; // skip header
+    const status = sheet.getRange(row, 9).getValue();
+    const paidCell = sheet.getRange(row, 16);
+    const existing = paidCell.getValue();
+    if (status === 'Paid') {
+      if (!(existing instanceof Date)) {
+        paidCell.setValue(today);
+        paidCell.setNumberFormat('yyyy-mm-dd');
+      }
+    } else if (existing) {
+      paidCell.clearContent();
+    }
+  }
+
+  try { CacheService.getScriptCache().remove('dashboard_v1'); } catch (err) { /* non-fatal */ }
 }
