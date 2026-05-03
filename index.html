@@ -1523,7 +1523,7 @@
          FOOTER (shared)
          ============================================================ -->
     <footer class="footer">
-      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v9</p>
+      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v10</p>
     </footer>
 
   </div>
@@ -1965,6 +1965,37 @@
     });
 
     // ============================================================
+    // DASHBOARD — single fetch powers Activity AND Statements
+    // ============================================================
+    const CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
+    const LS_DASHBOARD_KEY = 'cubico-pay-dash-v1';
+    const dashboardCache = { data: null, fetchedAt: 0 };
+    let dashboardLoadPromise = null;
+
+    // Stale-while-revalidate via localStorage. Apps Script GETs cost ~1.5–3s
+    // on mobile cellular even on a warm script, so we always paint cached
+    // data first and only spin while fetching fresh in the background.
+    function persistDashboard() {
+      try {
+        localStorage.setItem(LS_DASHBOARD_KEY, JSON.stringify({
+          data: dashboardCache.data,
+          fetchedAt: dashboardCache.fetchedAt
+        }));
+      } catch (e) { /* quota / private mode */ }
+    }
+    (function hydrateDashboard() {
+      try {
+        const raw = localStorage.getItem(LS_DASHBOARD_KEY);
+        if (!raw) return;
+        const obj = JSON.parse(raw);
+        if (obj && obj.data && obj.fetchedAt) {
+          dashboardCache.data = obj.data;
+          dashboardCache.fetchedAt = obj.fetchedAt;
+        }
+      } catch (e) { /* corrupt — ignore */ }
+    })();
+
+    // ============================================================
     // ONLINE / OFFLINE
     // ============================================================
     function updateOnlineStatus() {
@@ -1996,37 +2027,6 @@
     // Kick off a background refresh on app open so the cache is fresh by
     // the time the user taps a tab.
     if (navigator.onLine) loadDashboard(false);
-
-    // ============================================================
-    // DASHBOARD — single fetch powers Activity AND Statements
-    // ============================================================
-    const CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
-    const LS_DASHBOARD_KEY = 'cubico-pay-dash-v1';
-    const dashboardCache = { data: null, fetchedAt: 0 };
-    let dashboardLoadPromise = null;
-
-    // Stale-while-revalidate via localStorage. Apps Script GETs cost ~1.5–3s
-    // on mobile cellular even on a warm script, so we always paint cached
-    // data first and only spin while fetching fresh in the background.
-    function persistDashboard() {
-      try {
-        localStorage.setItem(LS_DASHBOARD_KEY, JSON.stringify({
-          data: dashboardCache.data,
-          fetchedAt: dashboardCache.fetchedAt
-        }));
-      } catch (e) { /* quota / private mode */ }
-    }
-    (function hydrateDashboard() {
-      try {
-        const raw = localStorage.getItem(LS_DASHBOARD_KEY);
-        if (!raw) return;
-        const obj = JSON.parse(raw);
-        if (obj && obj.data && obj.fetchedAt) {
-          dashboardCache.data = obj.data;
-          dashboardCache.fetchedAt = obj.fetchedAt;
-        }
-      } catch (e) { /* corrupt — ignore */ }
-    })();
 
     const refreshBtn  = document.getElementById('refreshBtn');
     const summaryGrid = document.getElementById('summaryGrid');
