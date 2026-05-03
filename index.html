@@ -1523,7 +1523,7 @@
          FOOTER (shared)
          ============================================================ -->
     <footer class="footer">
-      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v8</p>
+      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v9</p>
     </footer>
 
   </div>
@@ -1705,10 +1705,13 @@
       btn.addEventListener('click', () => switchTab(btn.dataset.tab));
     });
 
-    // Restore last-used tab
+    // Restore last-used tab — deferred so dashboard module finishes init
+    // first (onShow* callbacks reference state defined later in the script).
     try {
       const saved = localStorage.getItem(ACTIVE_TAB_KEY);
-      if (saved === 'activity' || saved === 'statements') switchTab(saved);
+      if (saved === 'activity' || saved === 'statements') {
+        setTimeout(() => switchTab(saved), 0);
+      }
     } catch (e) { /* private mode */ }
 
     // ============================================================
@@ -1772,9 +1775,11 @@
 
         if (result.ok) {
           // Single cache now powers both Activity and Statements; bust it
-          // so the freshly logged Pending entry shows up on next tab open.
+          // (in-memory + localStorage) so the freshly logged Pending entry
+          // shows up on next tab open.
           dashboardCache.data = null;
           dashboardCache.fetchedAt = 0;
+          try { localStorage.removeItem(LS_DASHBOARD_KEY); } catch (e) {}
           handleSuccess();
         } else {
           showError('Server rejected the entry', result.error || 'Unknown error from backend.');
@@ -1976,19 +1981,52 @@
     window.addEventListener('offline', updateOnlineStatus);
     updateOnlineStatus();
 
-    // Warm the dashboard cache as soon as the app opens, so the first
-    // Activity / Statements tap is instant (data already in memory).
-    if (navigator.onLine) {
-      // Defer past first paint to keep the initial render snappy.
-      setTimeout(() => loadDashboard(false), 250);
+    // If we already hydrated something from localStorage and Activity is the
+    // active tab, paint it immediately so the user sees real data instead of
+    // skeletons while the network refresh happens in the background.
+    if (dashboardCache.data) {
+      if (currentTab === 'activity') {
+        renderSummary(dashboardCache.data.summary);
+        renderRecent(dashboardCache.data.alerts || []);
+      } else if (currentTab === 'statements') {
+        renderStatements(dashboardCache.data.months || []);
+      }
     }
+
+    // Kick off a background refresh on app open so the cache is fresh by
+    // the time the user taps a tab.
+    if (navigator.onLine) loadDashboard(false);
 
     // ============================================================
     // DASHBOARD — single fetch powers Activity AND Statements
     // ============================================================
     const CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
+    const LS_DASHBOARD_KEY = 'cubico-pay-dash-v1';
     const dashboardCache = { data: null, fetchedAt: 0 };
     let dashboardLoadPromise = null;
+
+    // Stale-while-revalidate via localStorage. Apps Script GETs cost ~1.5–3s
+    // on mobile cellular even on a warm script, so we always paint cached
+    // data first and only spin while fetching fresh in the background.
+    function persistDashboard() {
+      try {
+        localStorage.setItem(LS_DASHBOARD_KEY, JSON.stringify({
+          data: dashboardCache.data,
+          fetchedAt: dashboardCache.fetchedAt
+        }));
+      } catch (e) { /* quota / private mode */ }
+    }
+    (function hydrateDashboard() {
+      try {
+        const raw = localStorage.getItem(LS_DASHBOARD_KEY);
+        if (!raw) return;
+        const obj = JSON.parse(raw);
+        if (obj && obj.data && obj.fetchedAt) {
+          dashboardCache.data = obj.data;
+          dashboardCache.fetchedAt = obj.fetchedAt;
+        }
+      } catch (e) { /* corrupt — ignore */ }
+    })();
 
     const refreshBtn  = document.getElementById('refreshBtn');
     const summaryGrid = document.getElementById('summaryGrid');
@@ -2032,7 +2070,12 @@
     }
 
     function onShowActivity() {
-      if (!dashboardCache.data || Date.now() - dashboardCache.fetchedAt > CACHE_TTL_MS) {
+      // Render whatever's cached immediately — even if old. Refresh silently.
+      if (dashboardCache.data) {
+        renderSummary(dashboardCache.data.summary);
+        renderRecent(dashboardCache.data.alerts || []);
+        if (Date.now() - dashboardCache.fetchedAt > CACHE_TTL_MS) loadDashboard(false);
+      } else {
         loadDashboard(false);
       }
     }
@@ -2053,6 +2096,7 @@
           if (!j.ok) throw new Error(j.error || 'Dashboard error');
           dashboardCache.data = j;
           dashboardCache.fetchedAt = Date.now();
+          persistDashboard();
           renderSummary(j.summary);
           renderRecent(j.alerts || []);
           if (currentTab === 'statements') renderStatements(j.months || []);
