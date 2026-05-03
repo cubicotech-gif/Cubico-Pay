@@ -1523,7 +1523,7 @@
          FOOTER (shared)
          ============================================================ -->
     <footer class="footer">
-      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v10</p>
+      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v11</p>
     </footer>
 
   </div>
@@ -2035,19 +2035,30 @@
     refreshBtn.addEventListener('click', () => loadDashboard(true));
 
     // Fail fast on flaky mobile networks (12s) instead of leaving skeletons.
-    async function fetchJson(url, ms) {
+    // iOS Safari/PWA can ignore AbortController across cross-origin
+    // redirects, leaving fetches hung forever. Race the fetch against an
+    // explicit timer that always rejects so the caller never stalls.
+    function fetchJson(url, ms) {
       const controller = new AbortController();
-      const t = setTimeout(() => controller.abort(), ms || 12000);
-      try {
-        const res = await fetch(url, { redirect: 'follow', signal: controller.signal });
+      const timeout = ms || 12000;
+
+      const fetchPromise = fetch(url, {
+        redirect: 'follow',
+        signal: controller.signal,
+        cache: 'no-store'
+      }).then(async (res) => {
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        return await res.json();
-      } catch (e) {
-        if (e && e.name === 'AbortError') throw new Error('Request timed out');
-        throw e;
-      } finally {
-        clearTimeout(t);
-      }
+        return res.json();
+      });
+
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => {
+          try { controller.abort(); } catch (e) { /* noop */ }
+          reject(new Error('Request timed out'));
+        }, timeout);
+      });
+
+      return Promise.race([fetchPromise, timeoutPromise]);
     }
 
     // Click / keyboard to toggle a row's expanded detail.
@@ -2081,8 +2092,10 @@
     }
 
     function loadDashboard(force) {
-      // Coalesce so a tab-switch + manual refresh don't double-fire.
-      if (dashboardLoadPromise) return dashboardLoadPromise;
+      // Coalesce so a tab-switch + auto refresh don't double-fire. But a
+      // user-initiated force (Refresh tap) must always be allowed through —
+      // otherwise a hung iOS fetch leaves the dashboard permanently stuck.
+      if (dashboardLoadPromise && !force) return dashboardLoadPromise;
       if (!force && dashboardCache.data &&
           (Date.now() - dashboardCache.fetchedAt < CACHE_TTL_MS)) return Promise.resolve();
       // navigator.onLine lies on iOS PWA mode — only respect it for auto loads.
@@ -2090,7 +2103,9 @@
 
       setRefreshSpinning(true);
 
-      const url = `${CONFIG.ENDPOINT}?action=dashboard&token=${encodeURIComponent(CONFIG.TOKEN)}`;
+      // Cache-buster — iOS PWA standalone sometimes serves a stale 302 from
+      // disk and never reaches the live backend.
+      const url = `${CONFIG.ENDPOINT}?action=dashboard&token=${encodeURIComponent(CONFIG.TOKEN)}&_=${Date.now()}`;
       dashboardLoadPromise = fetchJson(url)
         .then((j) => {
           if (!j.ok) throw new Error(j.error || 'Dashboard error');
