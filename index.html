@@ -1523,7 +1523,7 @@
          FOOTER (shared)
          ============================================================ -->
     <footer class="footer">
-      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v12</p>
+      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v13</p>
     </footer>
 
   </div>
@@ -1982,15 +1982,16 @@
     window.addEventListener('offline', updateOnlineStatus);
     updateOnlineStatus();
 
-    // Fetch the dashboard up front so data is ready by the time the user
-    // taps Activity or Statements.
-    if (navigator.onLine) loadDashboard();
-
     const refreshBtn  = document.getElementById('refreshBtn');
     const summaryGrid = document.getElementById('summaryGrid');
     const recentList  = document.getElementById('recentList');
 
     refreshBtn.addEventListener('click', () => loadDashboard());
+
+    // Fetch the dashboard up front so data is ready by the time the user
+    // taps Activity or Statements. Must run AFTER the const declarations
+    // above so setRefreshSpinning can read refreshBtn without hitting TDZ.
+    if (navigator.onLine) loadDashboard();
 
     // Click / keyboard to toggle a row's expanded detail.
     recentList.addEventListener('click', (ev) => toggleRowFromEvent(ev));
