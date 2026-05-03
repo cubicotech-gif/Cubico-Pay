@@ -1407,7 +1407,7 @@
       </form>
 
       <div class="form-note">
-        <strong>What happens next:</strong> the entry lands in your tracker. You'll fill ROE, fee %, paid status, and batch ref later when reconciling.
+        <strong>What happens next:</strong> the entry lands in your tracker. You'll fill ROE, paid status, and batch ref later when reconciling.
       </div>
     </div>
 
@@ -1523,7 +1523,7 @@
          FOOTER (shared)
          ============================================================ -->
     <footer class="footer">
-      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v13</p>
+      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v14</p>
     </footer>
 
   </div>
@@ -2174,10 +2174,10 @@
         cell_('USD received',      actualFilled ? formatUSD2(e.actualUsdAmount) : '', 'mono ' + (actualFilled ? 'success' : '')),
         cell_('PKR amount',        (typeof e.pkrAmount === 'number') ? formatPKR(e.pkrAmount) : '', 'mono'),
         cell_('ROE',               (typeof e.roe === 'number')        ? Number(e.roe).toFixed(2) : '', 'mono'),
-        cell_('Fee %',             (typeof e.feePct === 'number')     ? formatPct(e.feePct) : '', 'mono'),
         cell_('Final PKR to pay',  (typeof e.finalPKR === 'number')   ? formatPKR(e.finalPKR) : '', 'mono ' + (e.paidStatus === 'Paid' ? 'success' : 'coral')),
         cell_('Days since',        (typeof e.daysSince === 'number')  ? String(e.daysSince) : '', 'mono ' + dayColorClass(e.daysSince)),
         cell_('Account',           e.account || ''),
+        cell_('Sender (actual)',   e.actualSenderName || '', '', /* full */ true),
         cell_('Receipt',           e.receipt || ''),
         cell_('Paid status',       e.paidStatus || 'Unpaid'),
         cell_('Batch ref',         e.batchRef || '', 'mono', /* full */ true),
@@ -2194,13 +2194,6 @@
       const colCls = full ? 'detail-cell full' : 'detail-cell';
       return `<div class="${colCls}"><span class="detail-key">${escapeHtml(label)}</span>`
            + `<span class="${cls.join(' ')}">${display}</span></div>`;
-    }
-
-    function formatPct(n) {
-      // Sheet stores fee % as 0.04 (= 4%). Tolerate either decimal or whole-number form.
-      const v = Number(n);
-      const pct = Math.abs(v) <= 1 ? v * 100 : v;
-      return pct.toFixed(pct % 1 === 0 ? 0 : 1) + '%';
     }
 
     // ============================================================
