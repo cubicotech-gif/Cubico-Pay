@@ -540,6 +540,16 @@
     }
     .error-toast.visible { display: flex; }
 
+    /* Success variant: green accent + checkmark icon swap */
+    .error-toast.success {
+      border-color: var(--success);
+      box-shadow: 0 12px 32px rgba(16, 185, 129, 0.22);
+    }
+    .error-toast.success .error-toast-icon { background: var(--success); }
+    .error-toast .error-toast-icon-success { display: none; }
+    .error-toast.success .error-toast-icon-error { display: none; }
+    .error-toast.success .error-toast-icon-success { display: block; }
+
     .error-toast-icon {
       width: 24px;
       height: 24px;
@@ -1528,6 +1538,46 @@
     }
 
     /* ============================================================
+       PROMPT MODAL — small centered card for password prompts etc.
+       Shares .drawer-backdrop with the edit drawer.
+       ============================================================ */
+    .modal-card {
+      position: fixed;
+      left: 50%; top: 50%;
+      transform: translate(-50%, -50%) scale(0.96);
+      width: calc(100% - 32px);
+      max-width: 380px;
+      background: var(--surface);
+      border-radius: 16px;
+      box-shadow: var(--shadow-lg);
+      z-index: 95;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.18s ease, transform 0.18s ease;
+      overflow: hidden;
+    }
+    .modal-card.visible {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translate(-50%, -50%) scale(1);
+    }
+    .modal-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--coral) 0%, var(--coral-deep) 100%);
+    }
+    .modal-head { padding: 24px 24px 4px; }
+    .modal-body { padding: 14px 24px 4px; }
+    .modal-body .field { margin-bottom: 16px; }
+    .modal-actions {
+      display: flex;
+      gap: 10px;
+      padding: 16px 24px 20px;
+    }
+
+    /* ============================================================
        ADMIN — user management
        ============================================================ */
     .user-list {
@@ -1740,6 +1790,9 @@
             <select id="adminLogForClient" name="adminLogForClient" class="select">
               <option value="" disabled selected>Select a client</option>
             </select>
+          </div>
+          <div class="form-note" id="noClientsHint" style="display:none;margin-top:8px;">
+            <strong>No client accounts yet.</strong> Add one in the Team tab first, then come back here to log on their behalf.
           </div>
         </div>
 
@@ -2045,7 +2098,7 @@
          FOOTER (shared)
          ============================================================ -->
     <footer class="footer">
-      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v16</p>
+      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v17</p>
     </footer>
 
   </div>
@@ -2195,12 +2248,31 @@
   </div>
 
   <!-- ============================================================
+       PROMPT MODAL — masked-input dialog (passwords etc.)
+       ============================================================ -->
+  <div class="modal-card" id="promptModal" role="dialog" aria-modal="true" aria-labelledby="promptTitle">
+    <div class="modal-head">
+      <div class="drawer-eyebrow" id="promptEyebrow">Confirm</div>
+      <div class="drawer-title" id="promptTitle">—</div>
+      <div class="drawer-sub" id="promptSub"></div>
+    </div>
+    <div class="modal-body" id="promptBody"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="promptCancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="promptOk">Save</button>
+    </div>
+  </div>
+
+  <!-- ============================================================
        ERROR TOAST
        ============================================================ -->
   <div class="error-toast" id="errorToast" role="alert">
     <div class="error-toast-icon">
-      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <svg class="error-toast-icon-error" width="14" height="14" viewBox="0 0 14 14" fill="none">
         <path d="M7 4V8M7 10.5V10.5M1.5 12H12.5L7 1.5L1.5 12Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <svg class="error-toast-icon-success" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+        <path d="M2.5 7l3 3 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </div>
     <div class="error-toast-text">
@@ -2456,19 +2528,27 @@
       showAuthScreen();
     });
 
-    changePasswordBtn.addEventListener('click', () => {
+    changePasswordBtn.addEventListener('click', async () => {
       userMenu.classList.remove('visible');
-      const oldP = prompt('Current password:');
-      if (oldP === null) return;
-      const newP = prompt('New password (8+ chars):');
-      if (newP === null) return;
-      if (newP.length < 8) { showError('Password too short', 'Use at least 8 characters.'); return; }
-      apiPost('changePassword', { oldPassword: oldP, newPassword: newP })
-        .then((r) => {
-          if (r.ok) showError('Password updated', 'You can use the new password next time you sign in.');
-          else showError('Could not change password', r.error || 'Unknown error.');
-        })
-        .catch((err) => showError('Network error', err.message || 'Try again.'));
+      const r = await showPromptModal({
+        eyebrow: 'Account',
+        title: 'Change password',
+        subtitle: 'Both fields are masked — nothing is shown in plain text.',
+        fields: [
+          { name: 'old', label: 'Current password',     type: 'password', autocomplete: 'current-password' },
+          { name: 'new', label: 'New password (8+ chars)', type: 'password', autocomplete: 'new-password' }
+        ],
+        okLabel: 'Update password',
+        validate: (v) => v.new.length < 8 ? 'Use at least 8 characters.' : ''
+      });
+      if (!r) return;
+      try {
+        const res = await apiPost('changePassword', { oldPassword: r.old, newPassword: r.new });
+        if (res.ok) showSuccess('Password updated', 'Use the new one next time you sign in.');
+        else        showError("Couldn't change password", res.error || 'Unknown error.');
+      } catch (err) {
+        showError('Network error', err.message || 'Try again.');
+      }
     });
 
     // ============================================================
@@ -2685,9 +2765,91 @@
     function showError(title, message) {
       errorToastTitle.textContent = title;
       errorToastMsg.textContent = message;
+      errorToast.classList.remove('success');
       errorToast.classList.add('visible');
       clearTimeout(errorTimer);
       errorTimer = setTimeout(() => errorToast.classList.remove('visible'), 5000);
+    }
+
+    function showSuccess(title, message) {
+      errorToastTitle.textContent = title;
+      errorToastMsg.textContent = message;
+      errorToast.classList.add('success');
+      errorToast.classList.add('visible');
+      clearTimeout(errorTimer);
+      errorTimer = setTimeout(() => errorToast.classList.remove('visible'), 4000);
+    }
+
+    // ============================================================
+    // PROMPT MODAL — async helper. Resolves with values map or null.
+    //
+    // Usage:
+    //   const r = await showPromptModal({
+    //     eyebrow: 'Account', title: 'Change password',
+    //     fields: [{ name: 'old', label: 'Current password', type: 'password' },
+    //              { name: 'new', label: 'New password (8+ chars)', type: 'password' }],
+    //     okLabel: 'Update'
+    //   });
+    //   if (r) { /* r.old, r.new */ }
+    // ============================================================
+    const promptModalEl  = document.getElementById('promptModal');
+    const promptOkBtn    = document.getElementById('promptOk');
+    const promptCancelBtn = document.getElementById('promptCancel');
+    const promptEyebrow  = document.getElementById('promptEyebrow');
+    const promptTitleEl  = document.getElementById('promptTitle');
+    const promptSubEl    = document.getElementById('promptSub');
+    const promptBodyEl   = document.getElementById('promptBody');
+
+    function showPromptModal(opts) {
+      return new Promise((resolve) => {
+        promptEyebrow.textContent = opts.eyebrow || 'Confirm';
+        promptTitleEl.textContent = opts.title || '';
+        if (opts.subtitle) { promptSubEl.textContent = opts.subtitle; promptSubEl.style.display = ''; }
+        else                 promptSubEl.style.display = 'none';
+        promptOkBtn.textContent = opts.okLabel || 'Save';
+
+        const fields = opts.fields || [];
+        promptBodyEl.innerHTML = fields.map((f, i) =>
+          '<div class="field">'
+          + '<div class="field-label"><label for="promptField' + i + '">' + escapeHtml(f.label) + '</label>'
+          + (f.hint ? '<span class="hint">' + escapeHtml(f.hint) + '</span>' : '')
+          + '</div>'
+          + '<input id="promptField' + i + '" class="input" type="' + (f.type || 'text') + '" '
+          + 'autocomplete="' + (f.autocomplete || 'off') + '" '
+          + 'autocapitalize="none" autocorrect="off" spellcheck="false" />'
+          + '</div>'
+        ).join('');
+        const inputs = promptBodyEl.querySelectorAll('input');
+
+        const close = (result) => {
+          promptModalEl.classList.remove('visible');
+          drawerBackdrop.classList.remove('visible');
+          promptOkBtn.onclick = null;
+          promptCancelBtn.onclick = null;
+          document.removeEventListener('keydown', onKey);
+          resolve(result);
+        };
+        const submit = () => {
+          const values = {};
+          fields.forEach((f, i) => { values[f.name] = inputs[i].value; });
+          if (typeof opts.validate === 'function') {
+            const err = opts.validate(values);
+            if (err) { showError(opts.title || 'Invalid', err); return; }
+          }
+          close(values);
+        };
+        const onKey = (ev) => {
+          if (ev.key === 'Escape') close(null);
+          if (ev.key === 'Enter' && ev.target.tagName === 'INPUT') { ev.preventDefault(); submit(); }
+        };
+        promptCancelBtn.onclick = () => close(null);
+        promptOkBtn.onclick = submit;
+        document.addEventListener('keydown', onKey);
+
+        drawerBackdrop.classList.add('visible');
+        promptModalEl.classList.add('visible');
+        setTimeout(() => { try { inputs[0] && inputs[0].focus(); } catch (e) {} }, 60);
+      });
     }
 
     errorToastClose.addEventListener('click', () => {
@@ -3329,7 +3491,10 @@
       drawerBackdrop.classList.remove('visible');
     }
     drawerCloseBtn.addEventListener('click', closeDrawer);
-    drawerBackdrop.addEventListener('click', closeDrawer);
+    drawerBackdrop.addEventListener('click', () => {
+      // Backdrop is shared with the prompt modal — only act for the drawer.
+      if (drawer.classList.contains('visible')) closeDrawer();
+    });
 
     drawerSaveBtn.addEventListener('click', async () => {
       const row = parseInt(editRowField.value, 10);
@@ -3427,15 +3592,21 @@
           u.active ? '' : 'deactivated'
         ].filter(Boolean).join(' · ');
         const isSelf = u.username.toLowerCase() === me.toLowerCase();
+
+        const resetBtn = '<button class="icon-btn" data-action="reset" data-user="' + escapeHtml(u.username) + '" aria-label="Reset password" title="Reset password">'
+          + '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12.5 2v3.5H9M1.5 12V8.5H5M11.5 5A4.5 4.5 0 0 0 3.2 4M2.5 9A4.5 4.5 0 0 0 10.8 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+          + '</button>';
+        const removeBtn = '<button class="icon-btn danger" data-action="remove" data-user="' + escapeHtml(u.username) + '" aria-label="Deactivate" title="Deactivate user">'
+          + '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4h10M5 4V2.5h4V4M4 4l.5 8h5L10 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+          + '</button>';
+        const reactivateBtn = '<button class="icon-btn" data-action="reactivate" data-user="' + escapeHtml(u.username) + '" aria-label="Reactivate" title="Reactivate user">'
+          + '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7l3 3 6-6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+          + '</button>';
+
         const actions = u.active
-          ? ('<button class="icon-btn" data-action="reset" data-user="' + escapeHtml(u.username) + '" aria-label="Reset password" title="Reset password">'
-              + '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12.5 2v3.5H9M1.5 12V8.5H5M11.5 5A4.5 4.5 0 0 0 3.2 4M2.5 9A4.5 4.5 0 0 0 10.8 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-              + '</button>'
-              + (isSelf ? ''
-                  : '<button class="icon-btn danger" data-action="remove" data-user="' + escapeHtml(u.username) + '" aria-label="Deactivate" title="Deactivate user">'
-                    + '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4h10M5 4V2.5h4V4M4 4l.5 8h5L10 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-                    + '</button>'))
-          : '';
+          ? (resetBtn + (isSelf ? '' : removeBtn))
+          : reactivateBtn;
+
         return ''
           + '<div class="user-row ' + (u.active ? '' : 'inactive') + '">'
           +   '<div class="user-row-info">'
@@ -3453,20 +3624,35 @@
       const action = btn.dataset.action;
       const username = btn.dataset.user;
       if (action === 'reset') {
-        const np = prompt('New password for ' + username + ' (8+ chars):');
-        if (np === null) return;
-        if (np.length < 8) { showError('Too short', 'Password must be 8+ characters.'); return; }
+        const r = await showPromptModal({
+          eyebrow: 'Team',
+          title: 'Reset password',
+          subtitle: 'New password for ' + username + '.',
+          fields: [{ name: 'np', label: 'New password (8+ chars)', type: 'password', autocomplete: 'new-password' }],
+          okLabel: 'Set password',
+          validate: (v) => v.np.length < 8 ? 'Use at least 8 characters.' : ''
+        });
+        if (!r) return;
         try {
-          const r = await apiPost('users.resetPassword', { username: username, newPassword: np });
-          if (!r.ok) showError("Couldn't reset", r.error || 'Unknown error.');
-          else       showError('Password reset', 'Share the new password with ' + username + ' securely.');
+          const res = await apiPost('users.resetPassword', { username: username, newPassword: r.np });
+          if (!res.ok) showError("Couldn't reset", res.error || 'Unknown error.');
+          else         showSuccess('Password reset', 'Share the new password with ' + username + ' securely.');
         } catch (err) { showError('Network error', err.message || 'Try again.'); }
       } else if (action === 'remove') {
         if (!confirm('Deactivate ' + username + '? Their sessions will be invalidated.')) return;
         try {
           const r = await apiPost('users.remove', { username: username });
           if (!r.ok) { showError("Couldn't deactivate", r.error || 'Unknown error.'); return; }
+          showSuccess('User deactivated', username + ' can no longer sign in.');
           await loadUsers();
+        } catch (err) { showError('Network error', err.message || 'Try again.'); }
+      } else if (action === 'reactivate') {
+        try {
+          const r = await apiPost('users.reactivate', { username: username });
+          if (!r.ok) { showError("Couldn't reactivate", r.error || 'Unknown error.'); return; }
+          showSuccess('User reactivated', username + ' can sign in again.');
+          await loadUsers();
+          if (session && session.role === 'admin') loadClientsForPicker();
         } catch (err) { showError('Network error', err.message || 'Try again.'); }
       }
     });
@@ -3491,7 +3677,7 @@
         newRoleClient.checked = true;
         updateRoleField();
         await Promise.all([loadUsers(), loadClientsForPicker()]);
-        showError('Account created', 'Share the temporary password with the user.');
+        showSuccess('Account created', 'Share the temporary password with the user.');
       } catch (err) {
         showError('Network error', err.message || 'Try again.');
       } finally {
@@ -3507,22 +3693,44 @@
     // ============================================================
     // ADMIN — populate the "logging on behalf of" client picker
     // ============================================================
+    const clientPicker  = document.getElementById('adminLogForClient');
+    const noClientsHint = document.getElementById('noClientsHint');
+    const clientNameInput = document.getElementById('clientName');
+    let clientsByClientId = {};   // clientId -> username, for autofill
+
     async function loadClientsForPicker() {
       if (!session || session.role !== 'admin') return;
       try {
         const r = await apiGet('clients.list');
         if (!r.ok) return;
-        const picker = document.getElementById('adminLogForClient');
-        const prev = picker.value;
-        picker.innerHTML = '<option value="" disabled selected>Select a client</option>'
-          + (r.clients || []).map((c) =>
+        const list = r.clients || [];
+        clientsByClientId = {};
+        list.forEach((c) => { clientsByClientId[c.clientId] = c.username; });
+
+        const prev = clientPicker.value;
+        clientPicker.innerHTML = '<option value="" disabled selected>Select a client</option>'
+          + list.map((c) =>
               '<option value="' + escapeHtml(c.clientId) + '">'
               + escapeHtml(c.username) + ' (' + escapeHtml(c.clientId) + ')'
               + '</option>'
             ).join('');
-        if (prev) picker.value = prev;
+        if (prev && clientsByClientId[prev]) clientPicker.value = prev;
+
+        // Empty state — only matters during initial setup
+        noClientsHint.style.display = list.length ? 'none' : 'block';
+        clientPicker.disabled = !list.length;
       } catch (err) { /* non-fatal */ }
     }
+
+    // Autofill the sender name with the client's username on pick. Admin
+    // can still edit it (some receipts come in under a different name).
+    clientPicker.addEventListener('change', () => {
+      const cid = clientPicker.value;
+      const uname = clientsByClientId[cid];
+      if (uname && !clientNameInput.value.trim()) {
+        clientNameInput.value = uname;
+      }
+    });
 
     // ============================================================
     // BOOT — orchestrate auth check + per-role wiring

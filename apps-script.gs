@@ -130,6 +130,7 @@ function doPost(e) {
     if (action === 'editEntry')            return handleEditEntry_(data);
     if (action === 'users.add')            return handleAddUser_(data);
     if (action === 'users.remove')         return handleRemoveUser_(data);
+    if (action === 'users.reactivate')     return handleReactivateUser_(data);
     if (action === 'users.resetPassword')  return handleResetPassword_(data);
 
     return jsonResponse({ ok: false, error: 'Unknown action: ' + action });
@@ -387,6 +388,15 @@ function handleRemoveUser_(data) {
   return jsonResponse({ ok: true });
 }
 
+function handleReactivateUser_(data) {
+  const username = normUsername_(data.username);
+  const user = findUser_(username);
+  if (!user) return jsonResponse({ ok: false, error: 'User not found' });
+  if (user.active) return jsonResponse({ ok: true });
+  getUsersSheet_().getRange(user.row, 6).setValue(true);
+  return jsonResponse({ ok: true });
+}
+
 function handleResetPassword_(data) {
   const username = normUsername_(data.username);
   const newPassword = String(data.newPassword || '');
@@ -506,7 +516,7 @@ function handleLogPayment_(data, session) {
   sheet.getRange(targetRow, COL.usdAmount).setNumberFormat('$#,##0.00');
   sheet.getRange(targetRow, COL.entryDate).setNumberFormat('yyyy-mm-dd');
 
-  bustDashboardCache_();
+  bustDashboardCache_({ clientId: clientId });
 
   return jsonResponse({
     ok: true,
@@ -535,7 +545,7 @@ function handleConfirmEntry_(data) {
     sheet.getRange(row.n, COL.actualSender).setValue(String(data.actualSenderName || '').trim());
   }
 
-  bustDashboardCache_();
+  bustDashboardCache_({ clientId: getRowClientId_(sheet, row.n) });
   return jsonResponse({ ok: true });
 }
 
@@ -562,7 +572,7 @@ function handleMarkPaid_(data) {
     paidCell.clearContent();
   }
 
-  bustDashboardCache_();
+  bustDashboardCache_({ clientId: getRowClientId_(sheet, row.n) });
   return jsonResponse({ ok: true });
 }
 
@@ -582,7 +592,7 @@ function handleSetFinancials_(data) {
     sheet.getRange(row.n, COL.roe).setValue(v);
   }
 
-  bustDashboardCache_();
+  bustDashboardCache_({ clientId: getRowClientId_(sheet, row.n) });
   return jsonResponse({ ok: true });
 }
 
@@ -640,7 +650,7 @@ function handleEditEntry_(data) {
     }
   }
 
-  bustDashboardCache_();
+  bustDashboardCache_({ clientId: getRowClientId_(sheet, row.n) });
   return jsonResponse({ ok: true });
 }
 
@@ -907,15 +917,24 @@ function round2_(n) {
   return Math.round(n * 100) / 100;
 }
 
-function bustDashboardCache_() {
+/**
+ * Invalidate the cached dashboard payload(s). Admin cache is always
+ * cleared; pass clientId to also clear that client's cache so the
+ * change is visible to them on their next refresh (no 30s tail).
+ */
+function bustDashboardCache_(opts) {
   try {
     const cache = CacheService.getScriptCache();
     // Old key from pre-roles deployment, keep clearing it for a while.
     cache.remove('dashboard_v1');
     cache.remove('dashboard_admin');
-    // Per-client keys expire in CACHE_TTL_S anyway; admins poke the sheet
-    // most often, and a 30s tail is acceptable for clients.
+    const cid = opts && opts.clientId;
+    if (cid) cache.remove('dashboard_client_' + cid);
   } catch (e) { /* non-fatal */ }
+}
+
+function getRowClientId_(sheet, row) {
+  return String(sheet.getRange(row, COL.clientId).getValue() || '');
 }
 
 // ============================================
