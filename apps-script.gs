@@ -1,51 +1,63 @@
 /**
  * CUBICO PAY — APPS SCRIPT BACKEND
  * ============================================
- * Last modified: 2026-05-02 (single dashboard endpoint with CacheService — fast mobile loads)
+ * Last modified: 2026-05-11 (role-based auth: admin + client accounts)
  *
- * Receives POST requests from the Cubico Pay PWA, validates the shared
- * secret, and writes the payment entry directly into the "Payments Log"
- * tab. Also serves read-only GET endpoints for the in-app dashboard.
+ * Receives requests from the Cubico Pay PWA. Auth is now session-based:
+ * users log in with username + password; on success they get a session
+ * token (UUID) stored server-side in PropertiesService with a 24h sliding
+ * expiry. Every authenticated request carries that token.
  *
- * Returns JSON with {ok: true|false, ...}.
+ * Roles:
+ *   - admin  → full read/write of every payment, plus user management
+ *   - client → can log own payments, can read only own payments
+ *
+ * Sheet tabs used:
+ *   - "Payments Log" — payment entries. Column Q now holds clientId.
+ *   - "Users"        — auth store: username, passwordHash, salt, role,
+ *                      clientId, active, createdAt. Auto-created on first
+ *                      bootstrapAdmin() run.
  *
  * NOTE: After editing this file in the repo, paste the new contents into
  * the Apps Script editor and re-deploy (Manage Deployments → edit the
  * existing deployment → Save). The deployed version is stale until then.
+ *
+ * FIRST-TIME SETUP:
+ *   1. Paste this file into Apps Script editor.
+ *   2. Run bootstrapAdmin() once from the editor to seed the first admin
+ *      user. Check the execution log for the credentials.
+ *   3. Deploy as web app (Execute as: me; Who has access: anyone).
+ *   4. Log into the PWA with those credentials and change the password.
  */
 
 // ============================================
-// CONFIG — keep these in sync with the PWA
+// CONFIG
 // ============================================
 
-// Shared secret. Must match CONFIG.TOKEN in the PWA's index.html.
-// Treat like a password. Change BOTH places to rotate.
-const SECRET_TOKEN = 'cube-pay-7Hk9Mn4Q8s3xL2vR';
+const SHEET_NAME      = 'Payments Log';
+const USERS_SHEET     = 'Users';
+const SESSION_PREFIX  = 'session_';
+const SESSION_TTL_MS  = 24 * 60 * 60 * 1000;   // 24h sliding expiry
+const LOGIN_MAX_FAILS = 5;
+const LOGIN_WINDOW_S  = 15 * 60;               // 15 minutes
+const CACHE_TTL_S     = 30;                    // dashboard cache lifetime
 
-// Sheet tab name where new entries land
-const SHEET_NAME = 'Payments Log';
+// Column map for "Payments Log" — 1-based, matches the sheet.
+const COL = {
+  paymentDate: 1,  clientName: 2,  usdAmount: 3,  account: 4,  receipt: 5,
+  pkrAmount:   6,  feePct:     7,  finalPKR:   8,  paidStatus: 9, daysSince: 10,
+  batchRef:   11,  roe:       12,  entryDate: 13,
+  actualUsd:  14,  actualSender: 15, paidDate: 16, clientId: 17
+};
 
 // ============================================
-// ENDPOINTS — GET dispatch
+// GET DISPATCH
 // ============================================
 
-/**
- * GET handler. Dispatches on ?action=...
- *
- *   (none) | ?action=health   → public health check, no auth
- *   ?action=dashboard&token=… → everything the PWA needs in one shot:
- *                               {summary, alerts, months, allEntries}
- *
- * The dashboard response is memoised in CacheService for 30 seconds, so
- * repeated taps from the phone don't repeatedly scan the sheet. doPost()
- * busts the cache so a freshly logged payment is visible immediately.
- *
- * Token is passed as a query param because Apps Script GET handlers
- * cannot read custom request headers reliably.
- */
 function doGet(e) {
   const action = (e && e.parameter && e.parameter.action) || 'health';
 
+  // Public — used for uptime checks
   if (action === 'health') {
     return jsonResponse({
       ok: true,
@@ -54,152 +66,611 @@ function doGet(e) {
     });
   }
 
-  // All non-health actions require the shared secret.
-  const token = e && e.parameter && e.parameter.token;
-  if (token !== SECRET_TOKEN) {
-    return jsonResponse({ ok: false, error: 'Unauthorized' });
-  }
+  const session = validateSession_(e && e.parameter && e.parameter.token);
+  if (!session) return jsonResponse({ ok: false, error: 'Unauthorized', code: 'AUTH' });
 
   try {
-    if (action === 'dashboard') {
-      const data = getDashboardCached_();
-      return jsonResponse(Object.assign({ ok: true }, data));
+    if (action === 'me') {
+      return jsonResponse({
+        ok: true,
+        username: session.username,
+        role:     session.role,
+        clientId: session.clientId
+      });
     }
 
-    return jsonResponse({ ok: false, error: `Unknown action: ${action}` });
+    if (action === 'dashboard') {
+      return jsonResponse(Object.assign({ ok: true }, getDashboardCached_(session)));
+    }
+
+    if (action === 'users.list') {
+      if (session.role !== 'admin') return jsonResponse({ ok: false, error: 'Forbidden' });
+      return jsonResponse({ ok: true, users: listUsers_() });
+    }
+
+    if (action === 'clients.list') {
+      if (session.role !== 'admin') return jsonResponse({ ok: false, error: 'Forbidden' });
+      return jsonResponse({ ok: true, clients: listClients_() });
+    }
+
+    return jsonResponse({ ok: false, error: 'Unknown action: ' + action });
   } catch (err) {
-    return jsonResponse({
-      ok: false,
-      error: 'Server error: ' + (err.message || String(err))
-    });
+    return jsonResponse({ ok: false, error: 'Server error: ' + (err.message || String(err)) });
   }
 }
 
-/**
- * Receives payment entries from the PWA.
- * Expected body: {token, paymentDate, clientName, usdAmount, account, receipt}
- */
+// ============================================
+// POST DISPATCH
+// ============================================
+
 function doPost(e) {
   try {
-    // Parse the body. PWA sends as text/plain to avoid CORS preflight.
     const data = JSON.parse(e.postData.contents);
+    const action = data.action;
 
-    // ---- Auth ----
-    if (data.token !== SECRET_TOKEN) {
-      return jsonResponse({ ok: false, error: 'Unauthorized' });
-    }
+    if (!action) return jsonResponse({ ok: false, error: 'Missing action' });
 
-    // ---- Validate required fields ----
-    const required = ['paymentDate', 'clientName', 'usdAmount', 'account', 'receipt'];
-    for (const field of required) {
-      if (!data[field] && data[field] !== 0) {
-        return jsonResponse({ ok: false, error: `Missing field: ${field}` });
-      }
-    }
+    // ---- Public actions ----
+    if (action === 'login') return handleLogin_(data);
 
-    // ---- Parse + validate ----
-    // Build payment date as a local date so timezone offset doesn't shift it
-    const dateParts = String(data.paymentDate).split('-');
-    if (dateParts.length !== 3) {
-      return jsonResponse({ ok: false, error: 'Invalid date format. Expected YYYY-MM-DD.' });
-    }
-    const paymentDate = new Date(
-      parseInt(dateParts[0], 10),
-      parseInt(dateParts[1], 10) - 1,
-      parseInt(dateParts[2], 10)
-    );
-    if (isNaN(paymentDate.getTime())) {
-      return jsonResponse({ ok: false, error: 'Invalid payment date' });
-    }
+    // ---- Authenticated actions ----
+    const session = validateSession_(data.token);
+    if (!session) return jsonResponse({ ok: false, error: 'Unauthorized', code: 'AUTH' });
 
-    const usdAmount = parseFloat(data.usdAmount);
-    if (isNaN(usdAmount) || usdAmount <= 0) {
-      return jsonResponse({ ok: false, error: 'USD amount must be a positive number' });
-    }
+    if (action === 'logout')        return handleLogout_(data.token);
+    if (action === 'changePassword') return handleChangePassword_(data, session);
+    if (action === 'logPayment')    return handleLogPayment_(data, session);
 
-    const clientName = String(data.clientName).trim();
-    if (clientName.length === 0) {
-      return jsonResponse({ ok: false, error: 'Client name cannot be empty' });
-    }
+    // ---- Admin-only ----
+    if (session.role !== 'admin') return jsonResponse({ ok: false, error: 'Forbidden' });
 
-    // ---- Find target sheet ----
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ss.getSheetByName(SHEET_NAME);
-    if (!sheet) {
-      return jsonResponse({ ok: false, error: `Tab "${SHEET_NAME}" not found in spreadsheet` });
-    }
+    if (action === 'confirmEntry')         return handleConfirmEntry_(data);
+    if (action === 'markPaid')             return handleMarkPaid_(data);
+    if (action === 'setFinancials')        return handleSetFinancials_(data);
+    if (action === 'editEntry')            return handleEditEntry_(data);
+    if (action === 'users.add')            return handleAddUser_(data);
+    if (action === 'users.remove')         return handleRemoveUser_(data);
+    if (action === 'users.resetPassword')  return handleResetPassword_(data);
 
-    // ---- Insert a fresh row at the top so newest entries appear first ----
-    // After insertRowBefore(2): the new blank row is row 2, and what was
-    // previously rows 2..N is now rows 3..(N+1). Existing formulas auto-
-    // adjust their row references — nothing else to do for them.
-    sheet.insertRowBefore(2);
-    const targetRow = 2;
-    const tplRow = 3; // template — first pre-filled row, now shifted down
-
-    // Re-seed the formula / default-value columns on the new top row by
-    // copying from the template row directly below it.
-    //   F = PKR Amount             (formula)
-    //   G = Transaction Fee %      (default 4% literal)
-    //   H = Final PKR to Pay       (formula)
-    //   J = Days Since Received    (formula)
-    [6, 8, 10].forEach((col) => {
-      const f = sheet.getRange(tplRow, col).getFormulaR1C1();
-      if (f) sheet.getRange(targetRow, col).setFormulaR1C1(f);
-    });
-    const gVal = sheet.getRange(tplRow, 7).getValue();
-    if (gVal !== '' && gVal !== null) sheet.getRange(targetRow, 7).setValue(gVal);
-
-    // ---- Write the entry ----
-    // Columns A–E come from the form, M is auto-stamped, I/K/L stay manual.
-    sheet.getRange(targetRow, 1, 1, 5).setValues([[
-      paymentDate, clientName, usdAmount, data.account, data.receipt
-    ]]);
-    sheet.getRange(targetRow, 13).setValue(new Date());
-
-    // ---- Format the cells we just wrote ----
-    sheet.getRange(targetRow, 1).setNumberFormat('yyyy-mm-dd');
-    sheet.getRange(targetRow, 3).setNumberFormat('$#,##0.00');
-    sheet.getRange(targetRow, 13).setNumberFormat('yyyy-mm-dd');
-
-    // Invalidate the dashboard cache so the new entry is visible right away.
-    try { CacheService.getScriptCache().remove('dashboard_v1'); } catch (e) { /* non-fatal */ }
-
-    return jsonResponse({
-      ok: true,
-      row: targetRow,
-      message: `Logged $${usdAmount.toFixed(2)} from ${clientName} via ${data.account}`
-    });
-
+    return jsonResponse({ ok: false, error: 'Unknown action: ' + action });
   } catch (err) {
-    return jsonResponse({
-      ok: false,
-      error: 'Server error: ' + (err.message || String(err))
-    });
+    return jsonResponse({ ok: false, error: 'Server error: ' + (err.message || String(err)) });
   }
 }
 
 // ============================================
-// DASHBOARD QUERIES
+// AUTH — login, logout, sessions, hashing
 // ============================================
 
+function handleLogin_(data) {
+  const username = normUsername_(data.username);
+  const password = String(data.password || '');
+  if (!username || !password) {
+    return jsonResponse({ ok: false, error: 'Username and password required' });
+  }
+
+  const cache = CacheService.getScriptCache();
+  const rlKey = 'rl_' + username;
+  const fails = parseInt(cache.get(rlKey) || '0', 10);
+  if (fails >= LOGIN_MAX_FAILS) {
+    return jsonResponse({ ok: false, error: 'Too many attempts. Try again in 15 minutes.' });
+  }
+
+  const user = findUser_(username);
+  if (!user || !user.active) {
+    cache.put(rlKey, String(fails + 1), LOGIN_WINDOW_S);
+    return jsonResponse({ ok: false, error: 'Invalid credentials' });
+  }
+
+  const hash = hashPassword_(password, user.salt);
+  if (hash !== user.passwordHash) {
+    cache.put(rlKey, String(fails + 1), LOGIN_WINDOW_S);
+    return jsonResponse({ ok: false, error: 'Invalid credentials' });
+  }
+
+  cache.remove(rlKey);
+  cleanupExpiredSessions_();
+
+  const token = createSession_(user);
+  return jsonResponse({
+    ok: true,
+    token: token,
+    username: user.username,
+    role: user.role,
+    clientId: user.clientId,
+    expiresAt: Date.now() + SESSION_TTL_MS
+  });
+}
+
+function handleLogout_(token) {
+  PropertiesService.getScriptProperties().deleteProperty(SESSION_PREFIX + token);
+  return jsonResponse({ ok: true });
+}
+
+function handleChangePassword_(data, session) {
+  const oldPassword = String(data.oldPassword || '');
+  const newPassword = String(data.newPassword || '');
+  if (!oldPassword || !newPassword) {
+    return jsonResponse({ ok: false, error: 'oldPassword and newPassword required' });
+  }
+  if (newPassword.length < 8) {
+    return jsonResponse({ ok: false, error: 'New password must be at least 8 characters' });
+  }
+  const user = findUser_(session.username);
+  if (!user) return jsonResponse({ ok: false, error: 'User not found' });
+  if (hashPassword_(oldPassword, user.salt) !== user.passwordHash) {
+    return jsonResponse({ ok: false, error: 'Old password is incorrect' });
+  }
+  setUserPassword_(user, newPassword);
+  return jsonResponse({ ok: true });
+}
+
+function createSession_(user) {
+  const token = Utilities.getUuid().replace(/-/g, '') +
+                Utilities.getUuid().replace(/-/g, '').slice(0, 8);
+  const session = {
+    username:  user.username,
+    role:      user.role,
+    clientId:  user.clientId,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + SESSION_TTL_MS
+  };
+  PropertiesService.getScriptProperties()
+    .setProperty(SESSION_PREFIX + token, JSON.stringify(session));
+  return token;
+}
+
+function validateSession_(token) {
+  if (!token) return null;
+  const props = PropertiesService.getScriptProperties();
+  const raw = props.getProperty(SESSION_PREFIX + token);
+  if (!raw) return null;
+  let session;
+  try { session = JSON.parse(raw); } catch (e) { return null; }
+  if (!session.expiresAt || session.expiresAt < Date.now()) {
+    props.deleteProperty(SESSION_PREFIX + token);
+    return null;
+  }
+  // Sliding expiry — extend by another full TTL on activity, but only
+  // rewrite the row if we'd push it forward by at least a minute (cuts
+  // write traffic on rapid back-to-back requests).
+  if (session.expiresAt - Date.now() < SESSION_TTL_MS - 60 * 1000) {
+    session.expiresAt = Date.now() + SESSION_TTL_MS;
+    props.setProperty(SESSION_PREFIX + token, JSON.stringify(session));
+  }
+  return session;
+}
+
+function cleanupExpiredSessions_() {
+  const props = PropertiesService.getScriptProperties();
+  const all = props.getProperties();
+  const now = Date.now();
+  Object.keys(all).forEach((k) => {
+    if (k.indexOf(SESSION_PREFIX) !== 0) return;
+    try {
+      const s = JSON.parse(all[k]);
+      if (!s.expiresAt || s.expiresAt < now) props.deleteProperty(k);
+    } catch (e) {
+      props.deleteProperty(k);
+    }
+  });
+}
+
+function hashPassword_(password, salt) {
+  const bytes = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    String(salt) + String(password),
+    Utilities.Charset.UTF_8
+  );
+  let hex = '';
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i] < 0 ? bytes[i] + 256 : bytes[i];
+    hex += (b < 16 ? '0' : '') + b.toString(16);
+  }
+  return hex;
+}
+
+function generateSalt_() {
+  return Utilities.getUuid().replace(/-/g, '') +
+         Utilities.getUuid().replace(/-/g, '').slice(0, 16);
+}
+
+function normUsername_(u) {
+  return String(u || '').trim().toLowerCase();
+}
+
+// ============================================
+// USERS TAB
+// ============================================
+
+function getUsersSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(USERS_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(USERS_SHEET);
+    sheet.getRange(1, 1, 1, 7).setValues([
+      ['username', 'passwordHash', 'salt', 'role', 'clientId', 'active', 'createdAt']
+    ]);
+    sheet.setFrozenRows(1);
+    sheet.setColumnWidth(2, 320);
+    sheet.setColumnWidth(3, 220);
+  }
+  return sheet;
+}
+
+function findUser_(username) {
+  const sheet = getUsersSheet_();
+  const last = sheet.getLastRow();
+  if (last < 2) return null;
+  const u = normUsername_(username);
+  const values = sheet.getRange(2, 1, last - 1, 7).getValues();
+  for (let i = 0; i < values.length; i++) {
+    const r = values[i];
+    if (normUsername_(r[0]) === u) {
+      return {
+        row: i + 2,
+        username: String(r[0]),
+        passwordHash: String(r[1]),
+        salt: String(r[2]),
+        role: String(r[3]),
+        clientId: String(r[4] || ''),
+        active: toBool_(r[5]),
+        createdAt: r[6]
+      };
+    }
+  }
+  return null;
+}
+
+function listUsers_() {
+  const sheet = getUsersSheet_();
+  const last = sheet.getLastRow();
+  if (last < 2) return [];
+  const values = sheet.getRange(2, 1, last - 1, 7).getValues();
+  return values.map((r) => ({
+    username: String(r[0] || ''),
+    role: String(r[3] || ''),
+    clientId: String(r[4] || ''),
+    active: toBool_(r[5]),
+    createdAt: r[6] instanceof Date
+      ? Utilities.formatDate(r[6], Session.getScriptTimeZone(), 'yyyy-MM-dd')
+      : String(r[6] || '')
+  })).filter((u) => u.username);
+}
+
+function listClients_() {
+  return listUsers_()
+    .filter((u) => u.role === 'client' && u.active)
+    .map((u) => ({ username: u.username, clientId: u.clientId }));
+}
+
+function handleAddUser_(data) {
+  const username = normUsername_(data.username);
+  const password = String(data.password || '');
+  const role = data.role === 'admin' ? 'admin' : 'client';
+  const clientId = role === 'client'
+    ? String(data.clientId || '').trim()
+    : '';
+
+  if (!username) return jsonResponse({ ok: false, error: 'Username required' });
+  if (!/^[a-z0-9._-]{2,32}$/.test(username)) {
+    return jsonResponse({ ok: false, error: 'Username must be 2–32 chars: a-z, 0-9, dot, dash, underscore' });
+  }
+  if (password.length < 8) {
+    return jsonResponse({ ok: false, error: 'Password must be at least 8 characters' });
+  }
+  if (role === 'client' && !clientId) {
+    return jsonResponse({ ok: false, error: 'clientId required for client accounts' });
+  }
+  if (role === 'client' && !/^[A-Za-z0-9_-]{1,16}$/.test(clientId)) {
+    return jsonResponse({ ok: false, error: 'clientId must be 1–16 chars: a-z, A-Z, 0-9, dash, underscore' });
+  }
+  if (findUser_(username)) return jsonResponse({ ok: false, error: 'Username already exists' });
+
+  const sheet = getUsersSheet_();
+  const salt = generateSalt_();
+  const hash = hashPassword_(password, salt);
+  sheet.appendRow([username, hash, salt, role, clientId, true, new Date()]);
+  return jsonResponse({ ok: true });
+}
+
+function handleRemoveUser_(data) {
+  const username = normUsername_(data.username);
+  const user = findUser_(username);
+  if (!user) return jsonResponse({ ok: false, error: 'User not found' });
+  if (user.role === 'admin' && countActiveAdmins_() <= 1) {
+    return jsonResponse({ ok: false, error: 'Cannot deactivate the last admin' });
+  }
+  getUsersSheet_().getRange(user.row, 6).setValue(false);
+  // Best-effort: drop any active sessions for this user
+  invalidateSessionsForUser_(username);
+  return jsonResponse({ ok: true });
+}
+
+function handleResetPassword_(data) {
+  const username = normUsername_(data.username);
+  const newPassword = String(data.newPassword || '');
+  if (newPassword.length < 8) {
+    return jsonResponse({ ok: false, error: 'New password must be at least 8 characters' });
+  }
+  const user = findUser_(username);
+  if (!user) return jsonResponse({ ok: false, error: 'User not found' });
+  setUserPassword_(user, newPassword);
+  invalidateSessionsForUser_(username);
+  return jsonResponse({ ok: true });
+}
+
+function setUserPassword_(user, newPassword) {
+  const sheet = getUsersSheet_();
+  const salt = generateSalt_();
+  const hash = hashPassword_(newPassword, salt);
+  sheet.getRange(user.row, 2, 1, 2).setValues([[hash, salt]]);
+}
+
+function countActiveAdmins_() {
+  return listUsers_().filter((u) => u.role === 'admin' && u.active).length;
+}
+
+function invalidateSessionsForUser_(username) {
+  const props = PropertiesService.getScriptProperties();
+  const all = props.getProperties();
+  const u = normUsername_(username);
+  Object.keys(all).forEach((k) => {
+    if (k.indexOf(SESSION_PREFIX) !== 0) return;
+    try {
+      const s = JSON.parse(all[k]);
+      if (normUsername_(s.username) === u) props.deleteProperty(k);
+    } catch (e) { props.deleteProperty(k); }
+  });
+}
+
+function toBool_(v) {
+  if (v === true) return true;
+  if (v === false) return false;
+  const s = String(v || '').toLowerCase();
+  return s === 'true' || s === '1' || s === 'yes';
+}
+
+// ============================================
+// PAYMENT LOGGING (client + admin)
+// ============================================
+
+function handleLogPayment_(data, session) {
+  const required = ['paymentDate', 'usdAmount', 'account', 'receipt'];
+  for (const field of required) {
+    if (!data[field] && data[field] !== 0) {
+      return jsonResponse({ ok: false, error: 'Missing field: ' + field });
+    }
+  }
+
+  const dateParts = String(data.paymentDate).split('-');
+  if (dateParts.length !== 3) {
+    return jsonResponse({ ok: false, error: 'Invalid date format. Expected YYYY-MM-DD.' });
+  }
+  const paymentDate = new Date(
+    parseInt(dateParts[0], 10),
+    parseInt(dateParts[1], 10) - 1,
+    parseInt(dateParts[2], 10)
+  );
+  if (isNaN(paymentDate.getTime())) {
+    return jsonResponse({ ok: false, error: 'Invalid payment date' });
+  }
+
+  const usdAmount = parseFloat(data.usdAmount);
+  if (isNaN(usdAmount) || usdAmount <= 0) {
+    return jsonResponse({ ok: false, error: 'USD amount must be a positive number' });
+  }
+
+  // Client name + clientId resolution:
+  //   - client role: clientId comes from the session; clientName falls
+  //                  back to the username if the form didn't supply one
+  //   - admin role:  must pass clientId in the payload (logging on behalf
+  //                  of a specific client) and a client name
+  let clientName, clientId;
+  if (session.role === 'client') {
+    clientId   = session.clientId;
+    clientName = data.clientName
+      ? String(data.clientName).trim()
+      : session.username;
+  } else {
+    clientId = String(data.clientId || '').trim();
+    if (!clientId) return jsonResponse({ ok: false, error: 'clientId required when admin logs a payment' });
+    clientName = String(data.clientName || '').trim();
+    if (!clientName) return jsonResponse({ ok: false, error: 'Client name required' });
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) return jsonResponse({ ok: false, error: 'Tab "' + SHEET_NAME + '" not found in spreadsheet' });
+
+  sheet.insertRowBefore(2);
+  const targetRow = 2;
+  const tplRow = 3;
+
+  // Re-seed formula columns from the template row (now shifted to row 3).
+  [COL.pkrAmount, COL.finalPKR, COL.daysSince].forEach((col) => {
+    const f = sheet.getRange(tplRow, col).getFormulaR1C1();
+    if (f) sheet.getRange(targetRow, col).setFormulaR1C1(f);
+  });
+  const gVal = sheet.getRange(tplRow, COL.feePct).getValue();
+  if (gVal !== '' && gVal !== null) sheet.getRange(targetRow, COL.feePct).setValue(gVal);
+
+  // Write payment data
+  sheet.getRange(targetRow, 1, 1, 5).setValues([[
+    paymentDate, clientName, usdAmount, data.account, data.receipt
+  ]]);
+  sheet.getRange(targetRow, COL.entryDate).setValue(new Date());
+  sheet.getRange(targetRow, COL.clientId).setValue(clientId);
+
+  sheet.getRange(targetRow, COL.paymentDate).setNumberFormat('yyyy-mm-dd');
+  sheet.getRange(targetRow, COL.usdAmount).setNumberFormat('$#,##0.00');
+  sheet.getRange(targetRow, COL.entryDate).setNumberFormat('yyyy-mm-dd');
+
+  bustDashboardCache_();
+
+  return jsonResponse({
+    ok: true,
+    row: targetRow,
+    message: 'Logged $' + usdAmount.toFixed(2) + ' from ' + clientName + ' via ' + data.account
+  });
+}
+
+// ============================================
+// ADMIN ACTIONS — edit existing rows
+// ============================================
+
+function handleConfirmEntry_(data) {
+  const sheet = getPaymentsSheetOrThrow_();
+  const row = validateRow_(sheet, data.row);
+  if (row.error) return jsonResponse({ ok: false, error: row.error });
+
+  sheet.getRange(row.n, COL.receipt).setValue('Confirmed');
+
+  if (data.actualUsdAmount !== undefined && data.actualUsdAmount !== null && data.actualUsdAmount !== '') {
+    const v = parseFloat(data.actualUsdAmount);
+    if (isNaN(v) || v < 0) return jsonResponse({ ok: false, error: 'Invalid actualUsdAmount' });
+    sheet.getRange(row.n, COL.actualUsd).setValue(v).setNumberFormat('$#,##0.00');
+  }
+  if (data.actualSenderName !== undefined) {
+    sheet.getRange(row.n, COL.actualSender).setValue(String(data.actualSenderName || '').trim());
+  }
+
+  bustDashboardCache_();
+  return jsonResponse({ ok: true });
+}
+
+function handleMarkPaid_(data) {
+  const sheet = getPaymentsSheetOrThrow_();
+  const row = validateRow_(sheet, data.row);
+  if (row.error) return jsonResponse({ ok: false, error: row.error });
+
+  const status = data.paidStatus === 'Paid' ? 'Paid' : 'Unpaid';
+  sheet.getRange(row.n, COL.paidStatus).setValue(status);
+
+  if (data.batchRef !== undefined) {
+    sheet.getRange(row.n, COL.batchRef).setValue(String(data.batchRef || '').trim());
+  }
+
+  // onEdit() also handles the paid-date stamp for user edits in the sheet,
+  // but API writes don't trigger onEdit reliably — so stamp it here too.
+  const paidCell = sheet.getRange(row.n, COL.paidDate);
+  if (status === 'Paid') {
+    if (!(paidCell.getValue() instanceof Date)) {
+      paidCell.setValue(new Date()).setNumberFormat('yyyy-mm-dd');
+    }
+  } else {
+    paidCell.clearContent();
+  }
+
+  bustDashboardCache_();
+  return jsonResponse({ ok: true });
+}
+
+function handleSetFinancials_(data) {
+  const sheet = getPaymentsSheetOrThrow_();
+  const row = validateRow_(sheet, data.row);
+  if (row.error) return jsonResponse({ ok: false, error: row.error });
+
+  if (data.feePct !== undefined && data.feePct !== '') {
+    const v = parseFloat(data.feePct);
+    if (isNaN(v) || v < 0) return jsonResponse({ ok: false, error: 'Invalid feePct' });
+    sheet.getRange(row.n, COL.feePct).setValue(v);
+  }
+  if (data.roe !== undefined && data.roe !== '') {
+    const v = parseFloat(data.roe);
+    if (isNaN(v) || v < 0) return jsonResponse({ ok: false, error: 'Invalid ROE' });
+    sheet.getRange(row.n, COL.roe).setValue(v);
+  }
+
+  bustDashboardCache_();
+  return jsonResponse({ ok: true });
+}
+
 /**
- * Read every filled row from the Payments Log as plain objects.
- * "Filled" = column A (Payment Received Date) is non-empty.
+ * Generic edit — apply any subset of writable fields at once. Lets the
+ * admin drawer post one request instead of three.
  */
+function handleEditEntry_(data) {
+  const sheet = getPaymentsSheetOrThrow_();
+  const row = validateRow_(sheet, data.row);
+  if (row.error) return jsonResponse({ ok: false, error: row.error });
+
+  const writes = []; // [col, value, numberFormat?]
+
+  if (data.receipt !== undefined) writes.push([COL.receipt, String(data.receipt)]);
+  if (data.actualUsdAmount !== undefined) {
+    if (data.actualUsdAmount === '' || data.actualUsdAmount === null) {
+      sheet.getRange(row.n, COL.actualUsd).clearContent();
+    } else {
+      const v = parseFloat(data.actualUsdAmount);
+      if (isNaN(v) || v < 0) return jsonResponse({ ok: false, error: 'Invalid actualUsdAmount' });
+      writes.push([COL.actualUsd, v, '$#,##0.00']);
+    }
+  }
+  if (data.actualSenderName !== undefined) writes.push([COL.actualSender, String(data.actualSenderName || '').trim()]);
+  if (data.batchRef !== undefined) writes.push([COL.batchRef, String(data.batchRef || '').trim()]);
+  if (data.feePct !== undefined && data.feePct !== '') {
+    const v = parseFloat(data.feePct);
+    if (isNaN(v) || v < 0) return jsonResponse({ ok: false, error: 'Invalid feePct' });
+    writes.push([COL.feePct, v]);
+  }
+  if (data.roe !== undefined && data.roe !== '') {
+    const v = parseFloat(data.roe);
+    if (isNaN(v) || v < 0) return jsonResponse({ ok: false, error: 'Invalid ROE' });
+    writes.push([COL.roe, v]);
+  }
+
+  writes.forEach(([col, val, fmt]) => {
+    const cell = sheet.getRange(row.n, col);
+    cell.setValue(val);
+    if (fmt) cell.setNumberFormat(fmt);
+  });
+
+  // Paid status is handled with the same date-stamp logic as markPaid.
+  if (data.paidStatus !== undefined) {
+    const status = data.paidStatus === 'Paid' ? 'Paid' : 'Unpaid';
+    sheet.getRange(row.n, COL.paidStatus).setValue(status);
+    const paidCell = sheet.getRange(row.n, COL.paidDate);
+    if (status === 'Paid') {
+      if (!(paidCell.getValue() instanceof Date)) {
+        paidCell.setValue(new Date()).setNumberFormat('yyyy-mm-dd');
+      }
+    } else {
+      paidCell.clearContent();
+    }
+  }
+
+  bustDashboardCache_();
+  return jsonResponse({ ok: true });
+}
+
+function getPaymentsSheetOrThrow_() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  if (!sheet) throw new Error('Tab "' + SHEET_NAME + '" not found in spreadsheet');
+  return sheet;
+}
+
+function validateRow_(sheet, rowInput) {
+  const n = parseInt(rowInput, 10);
+  if (!n || n < 2) return { error: 'Invalid row' };
+  if (n > sheet.getMaxRows()) return { error: 'Row out of range' };
+  return { n: n };
+}
+
+// ============================================
+// DASHBOARD READS
+// ============================================
+
 function readFilledRows_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(SHEET_NAME);
-  if (!sheet) throw new Error(`Tab "${SHEET_NAME}" not found in spreadsheet`);
+  if (!sheet) throw new Error('Tab "' + SHEET_NAME + '" not found in spreadsheet');
 
   const maxRows = sheet.getMaxRows();
   if (maxRows < 2) return [];
 
-  // Columns N (actual USD received), O (actual sender name) and P (paid
-  // date, auto-stamped by onEdit) are all optional — older sheets may not
-  // have them yet. Read them when present, otherwise fall back gracefully.
   const maxCols = sheet.getMaxColumns();
-  const readCols = Math.max(13, Math.min(16, maxCols));
+  const readCols = Math.max(13, Math.min(17, maxCols));
 
   const values = sheet.getRange(2, 1, maxRows - 1, readCols).getValues();
   const rows = [];
@@ -209,22 +680,23 @@ function readFilledRows_() {
     if (a === '' || a === null || a === undefined) continue;
     rows.push({
       row:              i + 2,
-      paymentDate:      r[0],   // Date | ''
+      paymentDate:      r[0],
       clientName:       r[1],
-      usdAmount:        r[2],   // sender's claimed amount
+      usdAmount:        r[2],
       account:          r[3],
       receipt:          r[4],
-      pkrAmount:        r[5],   // formula or ''
+      pkrAmount:        r[5],
       feePct:           r[6],
-      finalPKR:         r[7],   // formula or ''
+      finalPKR:         r[7],
       paidStatus:       r[8],
-      daysSince:        r[9],   // formula or ''
+      daysSince:        r[9],
       batchRef:         r[10],
-      roe:              r[11],  // number or ''
-      entryDate:        r[12],  // Date | ''
+      roe:              r[11],
+      entryDate:        r[12],
       actualUsdAmount:  readCols >= 14 ? r[13] : '',
       actualSenderName: readCols >= 15 ? r[14] : '',
-      paidDate:         readCols >= 16 ? r[15] : ''   // Date | ''
+      paidDate:         readCols >= 16 ? r[15] : '',
+      clientId:         readCols >= 17 ? String(r[16] || '') : ''
     });
   }
   return rows;
@@ -234,22 +706,24 @@ function isNumeric_(v) {
   return typeof v === 'number' && !isNaN(v);
 }
 
-/**
- * Single sheet read → {summary, alerts, months, allEntries}.
- * Cached in CacheService for 30s so repeated taps from the phone don't
- * re-scan the sheet. doPost busts the cache on a successful write.
- */
-function getDashboardCached_() {
+function getDashboardCached_(session) {
   const cache = CacheService.getScriptCache();
-  const cached = cache.get('dashboard_v1');
+  const key = session.role === 'admin'
+    ? 'dashboard_admin'
+    : 'dashboard_client_' + session.clientId;
+  const cached = cache.get(key);
   if (cached) return JSON.parse(cached);
-  const data = buildDashboard_();
-  try { cache.put('dashboard_v1', JSON.stringify(data), 30); } catch (e) { /* non-fatal */ }
+  const data = buildDashboard_(session);
+  try { cache.put(key, JSON.stringify(data), CACHE_TTL_S); } catch (e) { /* non-fatal */ }
   return data;
 }
 
-function buildDashboard_() {
-  const rows = readFilledRows_();
+function buildDashboard_(session) {
+  let rows = readFilledRows_();
+  if (session.role === 'client') {
+    rows = rows.filter((r) => r.clientId === session.clientId);
+  }
+
   const tz = Session.getScriptTimeZone();
   const thisMonth = Utilities.formatDate(new Date(), tz, 'yyyy-MM');
 
@@ -258,8 +732,8 @@ function buildDashboard_() {
   let overdueCount = 0;
   let pendingReceiptsCount = 0;
 
-  const buckets = {};   // 'YYYY-MM' → month aggregate
-  const alerts = [];    // entries needing attention
+  const buckets = {};
+  const alerts = [];
 
   for (const r of rows) {
     const roeSet   = isNumeric_(r.roe) && r.roe > 0;
@@ -267,7 +741,6 @@ function buildDashboard_() {
     const isUnpaid = r.paidStatus === 'Unpaid';
     const usdForBucket = isNumeric_(r.actualUsdAmount) ? r.actualUsdAmount : r.usdAmount;
 
-    // Top-of-app summary metrics
     if (isUnpaid && roeSet && isNumeric_(r.finalPKR)) totalUnpaidPKR += r.finalPKR;
     if (isUnpaid && roeSet && isNumeric_(r.daysSince) && r.daysSince > 10) overdueCount += 1;
     if (r.receipt === 'Pending') pendingReceiptsCount += 1;
@@ -278,7 +751,6 @@ function buildDashboard_() {
         totalReceivedUSDThisMonth += usdForBucket;
       }
 
-      // Per-month bucket
       let b = buckets[ym];
       if (!b) {
         b = buckets[ym] = {
@@ -298,11 +770,9 @@ function buildDashboard_() {
       if (roeSet) { b.roeSum += r.roe; b.roeCount += 1; }
     }
 
-    // Worklist
     if (r.receipt !== 'Confirmed' || !isPaid) alerts.push(r);
   }
 
-  // Order alerts and allEntries by payment date desc; entry date as tiebreaker.
   const byPaymentDateDesc = (a, b) => {
     const pa = a.paymentDate instanceof Date ? a.paymentDate.getTime() : -Infinity;
     const pb = b.paymentDate instanceof Date ? b.paymentDate.getTime() : -Infinity;
@@ -314,7 +784,6 @@ function buildDashboard_() {
   alerts.sort(byPaymentDateDesc);
   const allEntries = rows.slice().sort(byPaymentDateDesc);
 
-  // Months: newest first.
   const months = Object.values(buckets).map((b) => ({
     month: b.month,
     label: b.label,
@@ -343,10 +812,6 @@ function buildDashboard_() {
   };
 }
 
-/**
- * Group every Paid entry by batch ref. Empty batch ref → single
- * "(no batch)" bucket. Sorted by latest paid date desc.
- */
 function buildPayouts_(rows) {
   const tz = Session.getScriptTimeZone();
   const buckets = {};
@@ -361,8 +826,8 @@ function buildPayouts_(rows) {
         count: 0,
         totalUSD: 0,
         totalFinalPKR: 0,
-        paidDates: {},     // 'yyyy-MM-dd' set
-        latestPaid: null,  // Date
+        paidDates: {},
+        latestPaid: null,
         entries: []
       };
     }
@@ -400,7 +865,6 @@ function buildPayouts_(rows) {
     };
   });
 
-  // Latest paid date first; batches with no paid date sink to the bottom.
   result.sort((a, b) => {
     if (a.paidDate && !b.paidDate) return -1;
     if (!a.paidDate && b.paidDate) return 1;
@@ -412,10 +876,6 @@ function buildPayouts_(rows) {
   return result;
 }
 
-/**
- * Common entry shape used by recent + entries. Includes every column the
- * dashboard's expanded detail view needs.
- */
 function serializeEntry_(r) {
   const tz = Session.getScriptTimeZone();
   return {
@@ -438,12 +898,24 @@ function serializeEntry_(r) {
     paidStatus: r.paidStatus || '',
     daysSince: isNumeric_(r.daysSince) ? r.daysSince : '',
     batchRef: r.batchRef || '',
-    roe: isNumeric_(r.roe) ? r.roe : ''
+    roe: isNumeric_(r.roe) ? r.roe : '',
+    clientId: r.clientId || ''
   };
 }
 
 function round2_(n) {
   return Math.round(n * 100) / 100;
+}
+
+function bustDashboardCache_() {
+  try {
+    const cache = CacheService.getScriptCache();
+    // Old key from pre-roles deployment, keep clearing it for a while.
+    cache.remove('dashboard_v1');
+    cache.remove('dashboard_admin');
+    // Per-client keys expire in CACHE_TTL_S anyway; admins poke the sheet
+    // most often, and a 30s tail is acceptable for clients.
+  } catch (e) { /* non-fatal */ }
 }
 
 // ============================================
@@ -461,17 +933,10 @@ function jsonResponse(obj) {
 // ============================================
 
 /**
- * Watches column I (Paid status) of "Payments Log".
- *
- *   set to "Paid"  → stamp today's date into column P (Paid date),
- *                    only if P is empty (don't clobber a manual fill)
- *   anything else  → clear column P
- *
- * Also busts the dashboard CacheService entry so the change is visible
- * on the next phone open without waiting 30s for the cache to expire.
- *
- * Runs as a SIMPLE trigger (no installation needed) — Apps Script wires
- * any function literally named `onEdit` automatically.
+ * Watches column I (Paid status) of "Payments Log". See original notes:
+ * stamps column P with today's date when status flips to Paid, clears it
+ * otherwise. Also busts the dashboard cache so admin/clients see fresh
+ * data on next open.
  */
 function onEdit(e) {
   if (!e || !e.range) return;
@@ -480,8 +945,7 @@ function onEdit(e) {
 
   const startCol = e.range.getColumn();
   const endCol = startCol + e.range.getNumColumns() - 1;
-  // Only react when the edit overlaps column I (9) — Paid status
-  if (startCol > 9 || endCol < 9) return;
+  if (startCol > COL.paidStatus || endCol < COL.paidStatus) return;
 
   const startRow = e.range.getRow();
   const numRows = e.range.getNumRows();
@@ -489,9 +953,9 @@ function onEdit(e) {
 
   for (let i = 0; i < numRows; i++) {
     const row = startRow + i;
-    if (row < 2) continue; // skip header
-    const status = sheet.getRange(row, 9).getValue();
-    const paidCell = sheet.getRange(row, 16);
+    if (row < 2) continue;
+    const status = sheet.getRange(row, COL.paidStatus).getValue();
+    const paidCell = sheet.getRange(row, COL.paidDate);
     const existing = paidCell.getValue();
     if (status === 'Paid') {
       if (!(existing instanceof Date)) {
@@ -503,5 +967,60 @@ function onEdit(e) {
     }
   }
 
-  try { CacheService.getScriptCache().remove('dashboard_v1'); } catch (err) { /* non-fatal */ }
+  bustDashboardCache_();
+}
+
+// ============================================
+// ONE-TIME SETUP — run from the Apps Script editor
+// ============================================
+
+/**
+ * Seed the first admin user. Run this once from the script editor after
+ * pasting this file in. Check the execution log for the temporary
+ * password — log in with it and change it immediately.
+ *
+ * Safe to run more than once: it bails out if an admin already exists.
+ */
+function bootstrapAdmin() {
+  const sheet = getUsersSheet_();
+  const existing = findUser_('admin');
+  if (existing) {
+    Logger.log('User "admin" already exists. Aborting.');
+    return;
+  }
+  // Random 12-char temporary password — visible only in the execution log.
+  const tempPassword = Utilities.getUuid().replace(/-/g, '').slice(0, 12);
+  const salt = generateSalt_();
+  const hash = hashPassword_(tempPassword, salt);
+  sheet.appendRow(['admin', hash, salt, 'admin', '', true, new Date()]);
+  Logger.log('================================================');
+  Logger.log('ADMIN USER CREATED');
+  Logger.log('Username: admin');
+  Logger.log('Password: ' + tempPassword);
+  Logger.log('LOG IN AND CHANGE THIS IMMEDIATELY.');
+  Logger.log('================================================');
+}
+
+/**
+ * Convenience: backfill the clientId column on existing payment rows.
+ * Set DEFAULT_CLIENT_ID to whatever you want assigned to legacy rows,
+ * then run this once. Skips rows that already have a clientId.
+ */
+function backfillClientIds() {
+  const DEFAULT_CLIENT_ID = 'legacy';
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  if (!sheet) throw new Error('Payments Log not found');
+  const last = sheet.getLastRow();
+  if (last < 2) return;
+  const range = sheet.getRange(2, COL.clientId, last - 1, 1);
+  const values = range.getValues();
+  let touched = 0;
+  for (let i = 0; i < values.length; i++) {
+    if (!values[i][0] || String(values[i][0]).trim() === '') {
+      values[i][0] = DEFAULT_CLIENT_ID;
+      touched += 1;
+    }
+  }
+  range.setValues(values);
+  Logger.log('Backfilled clientId on ' + touched + ' rows.');
 }

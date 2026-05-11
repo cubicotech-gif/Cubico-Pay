@@ -36,13 +36,13 @@
   <!-- ====================================================================
        CONFIGURATION
        ENDPOINT  : Apps Script Web App URL (from "Deploy → Manage deployments")
-       TOKEN     : Shared secret. Must match SECRET_TOKEN in apps-script.gs.
-                   Treat like a password. Rotate by changing both files.
+       Authentication is per-user now: users log in with username +
+       password and the app stores a session token. Run bootstrapAdmin()
+       in the Apps Script editor once to seed the first admin account.
        ==================================================================== -->
   <script>
     const CONFIG = {
-      ENDPOINT: 'https://script.google.com/macros/s/AKfycbwvzu3PwGpy1Gnig48CpcMHw3nKVtvsrV8WBhXH5BL1wL3kbRdxZIMQZdnSW4g6DDr2/exec',
-      TOKEN: 'cube-pay-7Hk9Mn4Q8s3xL2vR'
+      ENDPOINT: 'https://script.google.com/macros/s/AKfycbwvzu3PwGpy1Gnig48CpcMHw3nKVtvsrV8WBhXH5BL1wL3kbRdxZIMQZdnSW4g6DDr2/exec'
     };
   </script>
   <!-- ==================================================================== -->
@@ -1282,6 +1282,343 @@
     }
 
     /* ============================================================
+       AUTH SCREEN — full-screen gate before the app renders
+       ============================================================ */
+    .auth-screen {
+      position: fixed;
+      inset: 0;
+      background: var(--bg);
+      z-index: 200;
+      display: none;
+      align-items: flex-start;
+      justify-content: center;
+      overflow-y: auto;
+      padding: max(48px, env(safe-area-inset-top)) 20px max(40px, env(safe-area-inset-bottom));
+    }
+    .auth-screen.visible { display: flex; }
+    body.auth-mode { overflow: hidden; }
+
+    .auth-card {
+      width: 100%;
+      max-width: 380px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 32px 28px 28px;
+      box-shadow: var(--shadow-lg);
+      position: relative;
+      overflow: hidden;
+    }
+    .auth-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--coral) 0%, var(--coral-deep) 100%);
+    }
+    .auth-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 24px;
+    }
+    .auth-brand .brand-mark { width: 32px; height: 32px; font-size: 18px; }
+    .auth-eyebrow {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--coral);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    .auth-card h2 {
+      font-family: 'Fraunces', serif;
+      font-weight: 400;
+      font-size: 28px;
+      letter-spacing: -0.02em;
+      color: var(--navy);
+      margin-bottom: 6px;
+      line-height: 1.1;
+    }
+    .auth-card h2 em { font-style: italic; }
+    .auth-card .subtitle { font-size: 14px; margin-bottom: 24px; }
+    .auth-error {
+      display: none;
+      background: var(--coral-soft);
+      color: var(--coral-deep);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 13px;
+      margin-bottom: 14px;
+    }
+    .auth-error.visible { display: block; }
+
+    /* ============================================================
+       SESSION BAR — header chip with username + role + logout
+       ============================================================ */
+    .session-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .user-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px 6px 10px;
+      border-radius: 999px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--navy);
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .user-chip:hover { border-color: var(--border-strong); }
+    .role-chip {
+      display: inline-flex;
+      align-items: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 3px 7px;
+      border-radius: 4px;
+      background: var(--navy);
+      color: white;
+    }
+    .role-chip.client { background: var(--coral); }
+
+    .menu-popover {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow-lg);
+      padding: 6px;
+      min-width: 200px;
+      z-index: 60;
+      display: none;
+    }
+    .menu-popover.visible { display: block; }
+    .menu-item {
+      display: flex;
+      width: 100%;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 10px;
+      border: none;
+      background: transparent;
+      font-family: inherit;
+      font-size: 13px;
+      color: var(--navy);
+      border-radius: 8px;
+      cursor: pointer;
+      text-align: left;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .menu-item:hover { background: var(--bg); }
+    .menu-item.danger { color: var(--coral-deep); }
+    .menu-sep { height: 1px; background: var(--border); margin: 4px 6px; }
+    .header .session-wrap { position: relative; }
+
+    /* Role-gated visibility — body class toggles drive these */
+    body.role-client .admin-only { display: none !important; }
+    body.role-admin  .client-only { display: none !important; }
+
+    /* ============================================================
+       ADMIN — review drawer (bottom sheet)
+       ============================================================ */
+    .drawer-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 22, 40, 0.45);
+      backdrop-filter: blur(2px);
+      z-index: 80;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+    .drawer-backdrop.visible { opacity: 1; pointer-events: auto; }
+
+    .drawer {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: var(--surface);
+      border-radius: 20px 20px 0 0;
+      box-shadow: 0 -16px 48px -8px rgba(10, 22, 40, 0.2);
+      z-index: 90;
+      max-height: 92vh;
+      overflow-y: auto;
+      transform: translateY(100%);
+      transition: transform 0.25s ease;
+      padding-bottom: max(20px, env(safe-area-inset-bottom));
+    }
+    .drawer.visible { transform: translateY(0); }
+    .drawer-handle {
+      width: 40px;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--border-strong);
+      margin: 10px auto 12px;
+    }
+    .drawer-head {
+      padding: 0 24px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .drawer-eyebrow {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: var(--coral);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .drawer-title {
+      font-family: 'Fraunces', serif;
+      font-size: 22px;
+      letter-spacing: -0.02em;
+      color: var(--navy);
+      line-height: 1.15;
+    }
+    .drawer-sub {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 4px;
+    }
+    .drawer-body { padding: 18px 24px 8px; }
+    .drawer-body .field { margin-bottom: 18px; }
+    .drawer-actions {
+      display: flex;
+      gap: 10px;
+      padding: 14px 24px max(20px, env(safe-area-inset-bottom));
+      border-top: 1px solid var(--border);
+      position: sticky;
+      bottom: 0;
+      background: var(--surface);
+    }
+    .btn {
+      flex: 1;
+      padding: 14px 16px;
+      border-radius: 10px;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn-primary { background: var(--coral); color: white; }
+    .btn-primary:hover { background: var(--coral-deep); }
+    .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+    .btn-ghost { background: transparent; color: var(--navy); border: 1.5px solid var(--border-strong); }
+    .btn-ghost:hover { background: var(--bg); }
+    .btn-danger { background: transparent; color: var(--coral-deep); border: 1.5px solid var(--coral); }
+    .btn-danger:hover { background: var(--coral-soft); }
+
+    .field-pair {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    /* ============================================================
+       ADMIN — user management
+       ============================================================ */
+    .user-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .user-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      gap: 10px;
+    }
+    .user-row.inactive { opacity: 0.5; }
+    .user-row-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+    .user-row-name {
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--navy);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .user-row-meta {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: var(--muted-soft);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .user-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+    .icon-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .icon-btn:hover { border-color: var(--border-strong); color: var(--navy); }
+    .icon-btn.danger:hover { border-color: var(--coral); color: var(--coral-deep); }
+
+    .add-user-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+      margin-top: 16px;
+    }
+    .add-user-card h3 {
+      font-family: 'Fraunces', serif;
+      font-size: 16px;
+      font-weight: 400;
+      letter-spacing: -0.01em;
+      margin-bottom: 12px;
+      color: var(--navy);
+    }
+    .segmented {
+      display: inline-flex;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 3px;
+      gap: 2px;
+    }
+    .segmented input { display: none; }
+    .segmented label {
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      border-radius: 6px;
+      cursor: pointer;
+      letter-spacing: 0.02em;
+    }
+    .segmented input:checked + label {
+      background: var(--surface);
+      color: var(--navy);
+      box-shadow: var(--shadow-sm);
+    }
+
+    /* ============================================================
        RESPONSIVE — phone tweaks
        ============================================================ */
     @media (max-width: 480px) {
@@ -1292,10 +1629,50 @@
       .pill { padding: 10px 6px; font-size: 12px; }
       /* iOS won't zoom inputs when font-size >= 16px */
       .input, .select, .usd-input { font-size: 16px !important; }
+      .auth-card { padding: 28px 22px 24px; }
+      .tabbar .tab span { font-size: 10px; }
     }
   </style>
 </head>
-<body>
+<body class="auth-mode">
+
+  <!-- ============================================================
+       AUTH SCREEN — login gate. Shown until a valid session exists.
+       ============================================================ -->
+  <div class="auth-screen visible" id="authScreen" role="dialog" aria-label="Sign in">
+    <div class="auth-card">
+      <div class="auth-brand">
+        <div class="brand-mark">C</div>
+        <span class="brand-name">Cubico</span>
+      </div>
+      <div class="auth-eyebrow">Sign in</div>
+      <h2>Welcome <em>back</em></h2>
+      <p class="subtitle">Use the credentials shared by your Cubico admin.</p>
+
+      <div class="auth-error" id="authError"></div>
+
+      <form id="loginForm" autocomplete="off">
+        <div class="field">
+          <div class="field-label">
+            <label for="loginUsername">Username</label>
+          </div>
+          <input type="text" id="loginUsername" class="input" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required />
+        </div>
+        <div class="field">
+          <div class="field-label">
+            <label for="loginPassword">Password</label>
+          </div>
+          <input type="password" id="loginPassword" class="input" autocomplete="current-password" required />
+        </div>
+        <button type="submit" class="submit-btn" id="loginBtn">
+          <span class="btn-label">Sign in</span>
+          <svg class="arrow" width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M3 7H11M11 7L7 3M11 7L7 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </form>
+    </div>
+  </div>
 
   <div class="container">
 
@@ -1307,7 +1684,23 @@
         <div class="brand-mark">C</div>
         <span class="brand-name">Cubico</span>
       </div>
-      <div class="header-meta" id="todayDate"></div>
+      <div class="session-wrap">
+        <button class="user-chip" id="userChip" type="button" aria-haspopup="menu" aria-expanded="false">
+          <span class="role-chip" id="userRoleChip">…</span>
+          <span id="userChipName">—</span>
+          <svg width="10" height="10" viewBox="0 0 12 8" fill="none" aria-hidden="true">
+            <path d="M1 1.5l5 5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="menu-popover" id="userMenu" role="menu">
+          <div class="menu-item" style="cursor:default;pointer-events:none;">
+            <span class="header-meta" id="todayDate" style="font-size:11px;"></span>
+          </div>
+          <div class="menu-sep"></div>
+          <button class="menu-item" id="changePasswordBtn" type="button" role="menuitem">Change password</button>
+          <button class="menu-item danger" id="logoutBtn" type="button" role="menuitem">Log out</button>
+        </div>
+      </div>
     </header>
 
     <!-- ============================================================
@@ -1338,12 +1731,24 @@
           <input type="date" id="paymentDate" name="paymentDate" class="input" required />
         </div>
 
-        <div class="field">
+        <div class="field admin-only">
           <div class="field-label">
-            <label for="clientName">Client / sender name</label>
+            <label for="adminLogForClient">Logging on behalf of</label>
+            <span class="hint">Admin only</span>
+          </div>
+          <div class="select-wrapper">
+            <select id="adminLogForClient" name="adminLogForClient" class="select">
+              <option value="" disabled selected>Select a client</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field admin-only">
+          <div class="field-label">
+            <label for="clientName">Sender name as it appears</label>
             <span class="hint">As on screenshot</span>
           </div>
-          <input type="text" id="clientName" name="clientName" class="input" placeholder="e.g. Ahmed Khan or Pixel Studios LLC" required />
+          <input type="text" id="clientName" name="clientName" class="input" placeholder="e.g. Ahmed Khan or Pixel Studios LLC" />
         </div>
 
         <div class="field">
@@ -1559,10 +1964,88 @@
     </section>
 
     <!-- ============================================================
+         ADMIN VIEW — user management (admins only)
+         ============================================================ -->
+    <section class="view admin-only" id="adminView" role="tabpanel" aria-labelledby="tabAdmin">
+
+      <div class="title-block">
+        <div class="eyebrow">Admin · Team</div>
+        <h1>People with <em>access</em></h1>
+        <p class="subtitle">Each client logs in with their own account. Only admins see every payment.</p>
+      </div>
+
+      <div class="recent-section">
+        <div class="recent-section-header">
+          <span class="recent-section-title">All accounts</span>
+          <button class="refresh-btn" id="usersRefreshBtn" type="button" aria-label="Refresh users">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+              <path d="M12.5 2v3.5H9M1.5 12V8.5H5M11.5 5A4.5 4.5 0 0 0 3.2 4M2.5 9A4.5 4.5 0 0 0 10.8 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+        <div class="user-list" id="userList">
+          <div class="user-row">
+            <div class="user-row-info">
+              <span class="user-row-name"><span class="skeleton">Loading…</span></span>
+              <span class="user-row-meta"><span class="skeleton">role · id</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="add-user-card">
+        <h3>Add new user</h3>
+        <form id="addUserForm" autocomplete="off">
+          <div class="field">
+            <div class="field-label"><label>Role</label></div>
+            <div class="segmented" role="radiogroup">
+              <input type="radio" id="newRoleClient" name="newRole" value="client" checked />
+              <label for="newRoleClient">Client</label>
+              <input type="radio" id="newRoleAdmin" name="newRole" value="admin" />
+              <label for="newRoleAdmin">Admin</label>
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label">
+              <label for="newUsername">Username</label>
+              <span class="hint">a-z, 0-9, . _ -</span>
+            </div>
+            <input type="text" id="newUsername" class="input" autocapitalize="none" autocorrect="off" spellcheck="false" required />
+          </div>
+          <div class="field client-role-field">
+            <div class="field-label">
+              <label for="newClientId">Client ID</label>
+              <span class="hint">stable, e.g. c001</span>
+            </div>
+            <input type="text" id="newClientId" class="input" autocapitalize="none" autocorrect="off" spellcheck="false" />
+          </div>
+          <div class="field">
+            <div class="field-label">
+              <label for="newPassword">Temporary password</label>
+              <span class="hint">8+ chars</span>
+            </div>
+            <input type="text" id="newPassword" class="input" autocapitalize="none" autocorrect="off" spellcheck="false" required minlength="8" />
+          </div>
+          <button type="submit" class="submit-btn" id="addUserBtn">
+            <span class="btn-label">Create account</span>
+            <svg class="arrow" width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M3 7H11M11 7L7 3M11 7L7 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </form>
+        <div class="form-note">
+          <strong>Tip:</strong> share the temporary password with the user out-of-band. They can change it from the account menu after first sign-in.
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ============================================================
          FOOTER (shared)
          ============================================================ -->
     <footer class="footer">
-      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v15</p>
+      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v16</p>
     </footer>
 
   </div>
@@ -1599,6 +2082,15 @@
       </svg>
       <span>Payouts</span>
     </button>
+    <button class="tab admin-only" id="tabAdmin" type="button" role="tab" aria-selected="false" aria-controls="adminView" data-tab="admin">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="9" cy="8" r="3.2" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M3 19c.6-3 3-5 6-5s5.4 2 6 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        <circle cx="17" cy="9" r="2.4" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M14.5 17c.4-1.6 1.7-2.8 3.5-2.8s3.1 1.2 3.5 2.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      <span>Team</span>
+    </button>
   </nav>
 
   <!-- ============================================================
@@ -1614,6 +2106,91 @@
       <h2 class="success-title">Logged.</h2>
       <p class="success-subtitle">Payment recorded in your tracker.</p>
       <div class="success-meta" id="successMeta"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       ADMIN EDIT DRAWER — admin-only review/edit of one entry
+       ============================================================ -->
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+  <div class="drawer" id="editDrawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
+    <div class="drawer-handle"></div>
+    <div class="drawer-head">
+      <div class="drawer-eyebrow">Review entry</div>
+      <div class="drawer-title" id="drawerTitle">—</div>
+      <div class="drawer-sub" id="drawerSub">—</div>
+    </div>
+    <form id="editEntryForm" class="drawer-body">
+      <input type="hidden" id="editRow" />
+
+      <div class="field">
+        <div class="field-label">
+          <label>Receipt</label>
+          <span class="hint">Required</span>
+        </div>
+        <div class="pills" role="radiogroup" id="editReceiptPills">
+          <label class="pill" data-value="Confirmed"><input type="radio" name="editReceipt" value="Confirmed" /><span class="pill-dot"></span>Confirmed</label>
+          <label class="pill" data-value="Pending"><input type="radio" name="editReceipt" value="Pending" /><span class="pill-dot"></span>Pending</label>
+          <label class="pill" data-value="Not Received"><input type="radio" name="editReceipt" value="Not Received" /><span class="pill-dot"></span>Not Received</label>
+        </div>
+      </div>
+
+      <div class="field-pair">
+        <div class="field">
+          <div class="field-label">
+            <label for="editActualUsd">USD received (actual)</label>
+          </div>
+          <div class="usd-wrapper">
+            <span class="usd-prefix">$</span>
+            <input type="number" inputmode="decimal" step="0.01" min="0" id="editActualUsd" class="input usd-input" placeholder="0.00" />
+          </div>
+        </div>
+        <div class="field">
+          <div class="field-label">
+            <label for="editActualSender">Actual sender</label>
+          </div>
+          <input type="text" id="editActualSender" class="input" placeholder="Name on receipt" />
+        </div>
+      </div>
+
+      <div class="field-pair">
+        <div class="field">
+          <div class="field-label">
+            <label for="editFeePct">Fee</label>
+            <span class="hint">decimal, e.g. 0.04</span>
+          </div>
+          <input type="number" inputmode="decimal" step="0.001" min="0" id="editFeePct" class="input" placeholder="0.04" />
+        </div>
+        <div class="field">
+          <div class="field-label">
+            <label for="editRoe">ROE</label>
+            <span class="hint">PKR per USD</span>
+          </div>
+          <input type="number" inputmode="decimal" step="0.01" min="0" id="editRoe" class="input" placeholder="0.00" />
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <label>Paid status</label>
+        </div>
+        <div class="pills" role="radiogroup" id="editPaidPills">
+          <label class="pill" data-value="Unpaid"><input type="radio" name="editPaid" value="Unpaid" /><span class="pill-dot"></span>Unpaid</label>
+          <label class="pill" data-value="Paid"><input type="radio" name="editPaid" value="Paid" /><span class="pill-dot"></span>Paid</label>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <label for="editBatchRef">Batch reference</label>
+          <span class="hint">Group settled payments</span>
+        </div>
+        <input type="text" id="editBatchRef" class="input" placeholder="e.g. PYO-2026-05-A" />
+      </div>
+    </form>
+    <div class="drawer-actions">
+      <button type="button" class="btn btn-ghost" id="drawerCloseBtn">Cancel</button>
+      <button type="button" class="btn btn-primary" id="drawerSaveBtn">Save changes</button>
     </div>
   </div>
 
@@ -1701,6 +2278,200 @@
     'use strict';
 
     // ============================================================
+    // SESSION — load/save the current login from localStorage
+    // ============================================================
+    const SESSION_KEY = 'cubico-pay-session';
+    let session = null;
+
+    function loadSession() {
+      try {
+        const raw = localStorage.getItem(SESSION_KEY);
+        if (!raw) return null;
+        const s = JSON.parse(raw);
+        if (!s || !s.token || !s.expiresAt) return null;
+        if (s.expiresAt < Date.now()) return null;
+        return s;
+      } catch (e) { return null; }
+    }
+    function saveSession(s) {
+      session = s;
+      try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch (e) {}
+    }
+    function clearSession() {
+      session = null;
+      try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+    }
+
+    // ============================================================
+    // API HELPERS — every authenticated call goes through these. They
+    // attach the session token, parse JSON, and bounce to login on
+    // expired sessions automatically.
+    // ============================================================
+    async function apiPost(action, payload, opts) {
+      opts = opts || {};
+      const body = Object.assign({ action: action }, payload || {});
+      if (session && session.token && action !== 'login') body.token = session.token;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), opts.timeoutMs || 30000);
+      try {
+        const res = await fetch(CONFIG.ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(body),
+          redirect: 'follow',
+          signal: controller.signal
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const j = await res.json();
+        if (!j.ok && j.code === 'AUTH') { handleAuthExpired(); throw new Error(j.error || 'Session expired'); }
+        return j;
+      } finally { clearTimeout(timer); }
+    }
+
+    async function apiGet(action, params, opts) {
+      opts = opts || {};
+      const qs = new URLSearchParams(Object.assign({ action: action }, params || {}));
+      if (session && session.token) qs.set('token', session.token);
+      qs.set('_', String(Date.now()));
+      const url = CONFIG.ENDPOINT + '?' + qs.toString();
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), opts.timeoutMs || 20000);
+      try {
+        const res = await fetch(url, { signal: controller.signal, redirect: 'follow', cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const j = await res.json();
+        if (!j.ok && j.code === 'AUTH') { handleAuthExpired(); throw new Error(j.error || 'Session expired'); }
+        return j;
+      } finally { clearTimeout(timer); }
+    }
+
+    function handleAuthExpired() {
+      clearSession();
+      showAuthScreen('Your session expired. Please sign in again.');
+    }
+
+    // ============================================================
+    // AUTH SCREEN — show until a valid session exists
+    // ============================================================
+    const authScreen   = document.getElementById('authScreen');
+    const authError    = document.getElementById('authError');
+    const loginForm    = document.getElementById('loginForm');
+    const loginBtn     = document.getElementById('loginBtn');
+    const loginUser    = document.getElementById('loginUsername');
+    const loginPass    = document.getElementById('loginPassword');
+
+    function showAuthScreen(msg) {
+      document.body.classList.add('auth-mode');
+      document.body.classList.remove('role-admin', 'role-client');
+      authScreen.classList.add('visible');
+      if (msg) { authError.textContent = msg; authError.classList.add('visible'); }
+      else     { authError.classList.remove('visible'); }
+      setTimeout(() => { try { loginUser.focus(); } catch (e) {} }, 50);
+    }
+
+    function hideAuthScreen() {
+      document.body.classList.remove('auth-mode');
+      authScreen.classList.remove('visible');
+      authError.classList.remove('visible');
+    }
+
+    function applyRole(role) {
+      document.body.classList.toggle('role-admin',  role === 'admin');
+      document.body.classList.toggle('role-client', role === 'client');
+      const chip = document.getElementById('userRoleChip');
+      const name = document.getElementById('userChipName');
+      if (chip) {
+        chip.textContent = role;
+        chip.className = 'role-chip ' + (role === 'client' ? 'client' : '');
+      }
+      if (name && session) name.textContent = session.username;
+    }
+
+    function setLoginLoading(loading) {
+      loginBtn.disabled = loading;
+      loginBtn.querySelector('.btn-label').textContent = loading ? 'Signing in' : 'Sign in';
+      loginBtn.querySelector('.arrow').style.display = loading ? 'none' : '';
+      let sp = loginBtn.querySelector('.spinner');
+      if (loading && !sp) { sp = document.createElement('span'); sp.className = 'spinner'; loginBtn.appendChild(sp); }
+      if (!loading && sp) sp.remove();
+    }
+
+    loginForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      authError.classList.remove('visible');
+      const username = loginUser.value.trim();
+      const password = loginPass.value;
+      if (!username || !password) return;
+      setLoginLoading(true);
+      try {
+        const r = await apiPost('login', { username: username, password: password });
+        if (!r.ok) {
+          authError.textContent = r.error || 'Sign in failed.';
+          authError.classList.add('visible');
+        } else {
+          saveSession({
+            token: r.token,
+            username: r.username,
+            role: r.role,
+            clientId: r.clientId,
+            expiresAt: r.expiresAt
+          });
+          loginPass.value = '';
+          applyRole(r.role);
+          hideAuthScreen();
+          if (typeof onAuthReady === 'function') onAuthReady();
+        }
+      } catch (err) {
+        authError.textContent = (err && err.message) || 'Network error.';
+        authError.classList.add('visible');
+      } finally {
+        setLoginLoading(false);
+      }
+    });
+
+    // ============================================================
+    // SESSION MENU — username chip dropdown
+    // ============================================================
+    const userChip   = document.getElementById('userChip');
+    const userMenu   = document.getElementById('userMenu');
+    const logoutBtn  = document.getElementById('logoutBtn');
+    const changePasswordBtn = document.getElementById('changePasswordBtn');
+
+    userChip.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const open = userMenu.classList.toggle('visible');
+      userChip.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    document.addEventListener('click', (ev) => {
+      if (!userMenu.contains(ev.target) && ev.target !== userChip) {
+        userMenu.classList.remove('visible');
+        userChip.setAttribute('aria-expanded', 'false');
+      }
+    });
+
+    logoutBtn.addEventListener('click', async () => {
+      userMenu.classList.remove('visible');
+      try { await apiPost('logout', {}); } catch (e) { /* still log out locally */ }
+      clearSession();
+      showAuthScreen();
+    });
+
+    changePasswordBtn.addEventListener('click', () => {
+      userMenu.classList.remove('visible');
+      const oldP = prompt('Current password:');
+      if (oldP === null) return;
+      const newP = prompt('New password (8+ chars):');
+      if (newP === null) return;
+      if (newP.length < 8) { showError('Password too short', 'Use at least 8 characters.'); return; }
+      apiPost('changePassword', { oldPassword: oldP, newPassword: newP })
+        .then((r) => {
+          if (r.ok) showError('Password updated', 'You can use the new password next time you sign in.');
+          else showError('Could not change password', r.error || 'Unknown error.');
+        })
+        .catch((err) => showError('Network error', err.message || 'Try again.'));
+    });
+
+    // ============================================================
     // INIT — defaults and DOM references
     // ============================================================
     const today = new Date();
@@ -1732,11 +2503,14 @@
       activity:   document.getElementById('activityView'),
       statements: document.getElementById('statementsView'),
       payouts:    document.getElementById('payoutsView'),
+      admin:      document.getElementById('adminView'),
     };
     let currentTab = 'log';
 
     function switchTab(name) {
       if (!views[name] || currentTab === name) return;
+      // The admin tab is invisible to clients; ignore stale localStorage.
+      if (name === 'admin' && (!session || session.role !== 'admin')) return;
       currentTab = name;
       Object.entries(views).forEach(([k, el]) => el.classList.toggle('view-active', k === name));
       tabButtons.forEach((btn) => {
@@ -1747,31 +2521,33 @@
       if (name === 'activity'   && typeof onShowActivity   === 'function') onShowActivity();
       if (name === 'statements' && typeof onShowStatements === 'function') onShowStatements();
       if (name === 'payouts'    && typeof onShowPayouts    === 'function') onShowPayouts();
+      if (name === 'admin'      && typeof onShowAdmin      === 'function') onShowAdmin();
     }
 
     tabButtons.forEach((btn) => {
       btn.addEventListener('click', () => switchTab(btn.dataset.tab));
     });
 
-    // Restore last-used tab — deferred so dashboard module finishes init
-    // first (onShow* callbacks reference state defined later in the script).
-    try {
-      const saved = localStorage.getItem(ACTIVE_TAB_KEY);
-      if (saved === 'activity' || saved === 'statements' || saved === 'payouts') {
-        setTimeout(() => switchTab(saved), 0);
-      }
-    } catch (e) { /* private mode */ }
+    // Tab restoration is deferred until onAuthReady() — at boot we don't
+    // yet know the user's role, so we can't safely restore "admin".
 
     // ============================================================
-    // PILL BEHAVIOR — radio group with custom UI
+    // PILL BEHAVIOR — radio group with custom UI. Scoped to the nearest
+    // role="radiogroup" so multiple groups on the page don't fight.
     // ============================================================
-    pills.forEach(pill => {
-      pill.addEventListener('click', () => {
-        pills.forEach(p => p.classList.remove('active'));
-        pill.classList.add('active');
-        pill.querySelector('input').checked = true;
+    function wirePills(root) {
+      root.querySelectorAll('.pill').forEach((pill) => {
+        pill.addEventListener('click', () => {
+          const group = pill.closest('[role="radiogroup"]');
+          if (!group) return;
+          group.querySelectorAll('.pill').forEach((p) => p.classList.remove('active'));
+          pill.classList.add('active');
+          const input = pill.querySelector('input');
+          if (input) input.checked = true;
+        });
       });
-    });
+    }
+    wirePills(document);
 
     // ============================================================
     // FORM SUBMISSION → Apps Script Web App
@@ -1781,6 +2557,11 @@
 
       if (!CONFIG.ENDPOINT || CONFIG.ENDPOINT.includes('PASTE_YOUR')) {
         showError('Configuration missing', 'Edit index.html and paste the Apps Script URL into CONFIG.ENDPOINT.');
+        return;
+      }
+      if (!session) {
+        showError('Not signed in', 'Please sign in to log a payment.');
+        showAuthScreen();
         return;
       }
 
@@ -1795,35 +2576,36 @@
         return;
       }
 
+      // For client role, clientName is filled server-side from the session.
+      // For admin role, both clientId (the account this payment belongs to)
+      // and clientName (the sender as shown on the receipt) are needed.
       const payload = {
-        token:       CONFIG.TOKEN,
         paymentDate: document.getElementById('paymentDate').value,
-        clientName:  document.getElementById('clientName').value.trim(),
         usdAmount:   document.getElementById('usdAmount').value,
         account:     document.getElementById('account').value,
         receipt:     receiptValue.value,
       };
+      if (session.role === 'admin') {
+        const picker = document.getElementById('adminLogForClient');
+        const cname  = document.getElementById('clientName').value.trim();
+        if (!picker.value) {
+          showError('Pick a client', 'Choose which client this payment is for.');
+          return;
+        }
+        if (!cname) {
+          showError('Sender name required', 'Enter the sender name as it appears on the receipt.');
+          return;
+        }
+        payload.clientId   = picker.value;
+        payload.clientName = cname;
+      }
 
-      window.lastSubmission = payload;
+      window.lastSubmission = Object.assign({ clientName: session.username }, payload);
       setLoading(true);
 
       try {
-        const res = await fetch(CONFIG.ENDPOINT, {
-          method: 'POST',
-          // text/plain avoids the CORS preflight Apps Script doesn't always handle.
-          // The body is still JSON; the script parses it with JSON.parse().
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify(payload),
-          redirect: 'follow',
-        });
-
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-        const result = await res.json();
-
+        const result = await apiPost('logPayment', payload);
         if (result.ok) {
-          // Bust the dashboard cache so the freshly logged entry shows up
-          // next time the user opens Activity or Statements.
           dashboardCache.data = null;
           handleSuccess();
         } else {
@@ -2036,10 +2818,8 @@
 
     refreshBtn.addEventListener('click', () => loadDashboard());
 
-    // Fetch the dashboard up front so data is ready by the time the user
-    // taps Activity or Statements. Must run AFTER the const declarations
-    // above so setRefreshSpinning can read refreshBtn without hitting TDZ.
-    if (navigator.onLine) loadDashboard();
+    // Dashboard pre-fetch is deferred until we know the session is good —
+    // see onAuthReady() at the bottom of this script.
 
     // Click / keyboard to toggle a row's expanded detail.
     recentList.addEventListener('click', (ev) => toggleRowFromEvent(ev));
@@ -2071,20 +2851,11 @@
 
     async function loadDashboard() {
       if (dashboardLoading) return;
+      if (!session) return;
       dashboardLoading = true;
       setRefreshSpinning(true);
-      const url = `${CONFIG.ENDPOINT}?action=dashboard&token=${encodeURIComponent(CONFIG.TOKEN)}&_=${Date.now()}`;
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 20000);
-        const res = await fetch(url, {
-          signal: controller.signal,
-          redirect: 'follow',
-          cache: 'no-store'
-        });
-        clearTimeout(timer);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const j = await res.json();
+        const j = await apiGet('dashboard');
         if (!j.ok) throw new Error(j.error || 'Dashboard error');
         dashboardCache.data = j;
         renderSummary(j.summary);
@@ -2237,7 +3008,11 @@
         cell_('Paid on',           e.paidDate ? formatDate(e.paidDate) : '', 'mono'),
         cell_('Batch ref',         e.batchRef || '', 'mono', /* full */ true),
       ];
-      return `<div class="detail-grid">${cells.join('')}</div>`;
+      const adminEdit =
+        '<div class="detail-cell full admin-only" style="margin-top:6px;">'
+        + `<button type="button" class="btn btn-ghost edit-entry-btn" data-edit-row="${e.row}">`
+        + 'Review / edit this entry</button></div>';
+      return `<div class="detail-grid">${cells.join('')}${adminEdit}</div>`;
     }
 
     function cell_(label, value, valClass, full) {
@@ -2491,6 +3266,309 @@
         '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
       }[c]));
     }
+
+    // ============================================================
+    // ADMIN — review drawer
+    // ============================================================
+    const drawer         = document.getElementById('editDrawer');
+    const drawerBackdrop = document.getElementById('drawerBackdrop');
+    const drawerCloseBtn = document.getElementById('drawerCloseBtn');
+    const drawerSaveBtn  = document.getElementById('drawerSaveBtn');
+    const drawerTitle    = document.getElementById('drawerTitle');
+    const drawerSub      = document.getElementById('drawerSub');
+    const editRowField   = document.getElementById('editRow');
+    const editActualUsd  = document.getElementById('editActualUsd');
+    const editActualSender = document.getElementById('editActualSender');
+    const editFeePct     = document.getElementById('editFeePct');
+    const editRoe        = document.getElementById('editRoe');
+    const editBatchRef   = document.getElementById('editBatchRef');
+
+    function setPillGroup(groupId, value) {
+      const group = document.getElementById(groupId);
+      if (!group) return;
+      group.querySelectorAll('.pill').forEach((p) => {
+        const match = p.dataset.value === value;
+        p.classList.toggle('active', match);
+        const input = p.querySelector('input');
+        if (input) input.checked = match;
+      });
+    }
+    function getPillGroupValue(groupId) {
+      const group = document.getElementById(groupId);
+      if (!group) return '';
+      const checked = group.querySelector('input:checked');
+      return checked ? checked.value : '';
+    }
+
+    function openDrawerForRow(row) {
+      const all = (dashboardCache.data && dashboardCache.data.allEntries) || [];
+      const entry = all.find((x) => x.row === row);
+      if (!entry) { showError("Couldn't find entry", 'Refresh and try again.'); return; }
+      editRowField.value = String(entry.row);
+      drawerTitle.textContent = entry.clientName || '—';
+      const bits = [];
+      if (typeof entry.usdAmount === 'number') bits.push(formatUSD2(entry.usdAmount));
+      if (entry.account) bits.push(entry.account);
+      if (entry.paymentDate) bits.push(formatDate(entry.paymentDate));
+      drawerSub.textContent = bits.join(' · ');
+
+      setPillGroup('editReceiptPills', entry.receipt || 'Pending');
+      setPillGroup('editPaidPills',    entry.paidStatus === 'Paid' ? 'Paid' : 'Unpaid');
+      editActualUsd.value    = (typeof entry.actualUsdAmount === 'number') ? entry.actualUsdAmount : '';
+      editActualSender.value = entry.actualSenderName || '';
+      editFeePct.value       = (typeof entry.feePct === 'number') ? entry.feePct : '';
+      editRoe.value          = (typeof entry.roe === 'number') ? entry.roe : '';
+      editBatchRef.value     = entry.batchRef || '';
+
+      drawerBackdrop.classList.add('visible');
+      drawer.classList.add('visible');
+    }
+
+    function closeDrawer() {
+      drawer.classList.remove('visible');
+      drawerBackdrop.classList.remove('visible');
+    }
+    drawerCloseBtn.addEventListener('click', closeDrawer);
+    drawerBackdrop.addEventListener('click', closeDrawer);
+
+    drawerSaveBtn.addEventListener('click', async () => {
+      const row = parseInt(editRowField.value, 10);
+      if (!row) return;
+      const payload = {
+        row: row,
+        receipt:          getPillGroupValue('editReceiptPills'),
+        paidStatus:       getPillGroupValue('editPaidPills'),
+        actualUsdAmount:  editActualUsd.value === '' ? '' : editActualUsd.value,
+        actualSenderName: editActualSender.value.trim(),
+        feePct:           editFeePct.value,
+        roe:              editRoe.value,
+        batchRef:         editBatchRef.value.trim(),
+      };
+      drawerSaveBtn.disabled = true;
+      drawerSaveBtn.textContent = 'Saving…';
+      try {
+        const r = await apiPost('editEntry', payload);
+        if (!r.ok) { showError("Couldn't save", r.error || 'Unknown error.'); return; }
+        dashboardCache.data = null;
+        closeDrawer();
+        await loadDashboard();
+      } catch (err) {
+        showError('Network error', err.message || 'Try again.');
+      } finally {
+        drawerSaveBtn.disabled = false;
+        drawerSaveBtn.textContent = 'Save changes';
+      }
+    });
+
+    // Open drawer when an admin taps the Edit button inside any expanded
+    // row across Activity / Statements / Payouts. Stops the row-toggle
+    // click handler from collapsing the row.
+    document.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('.edit-entry-btn');
+      if (!btn) return;
+      ev.stopPropagation();
+      ev.preventDefault();
+      const row = parseInt(btn.dataset.editRow, 10);
+      if (row) openDrawerForRow(row);
+    }, true);
+
+    // ============================================================
+    // ADMIN — team (user management)
+    // ============================================================
+    const userList         = document.getElementById('userList');
+    const usersRefreshBtn  = document.getElementById('usersRefreshBtn');
+    const addUserForm      = document.getElementById('addUserForm');
+    const addUserBtn       = document.getElementById('addUserBtn');
+    const newUsernameInput = document.getElementById('newUsername');
+    const newPasswordInput = document.getElementById('newPassword');
+    const newClientIdInput = document.getElementById('newClientId');
+    const newRoleClient    = document.getElementById('newRoleClient');
+    const newRoleAdmin     = document.getElementById('newRoleAdmin');
+    const clientIdField    = newClientIdInput.closest('.field');
+
+    function updateRoleField() {
+      const isClient = newRoleClient.checked;
+      clientIdField.style.display = isClient ? '' : 'none';
+      newClientIdInput.required = isClient;
+    }
+    newRoleClient.addEventListener('change', updateRoleField);
+    newRoleAdmin.addEventListener('change', updateRoleField);
+    updateRoleField();
+
+    usersRefreshBtn.addEventListener('click', () => loadUsers());
+
+    async function loadUsers() {
+      if (!session || session.role !== 'admin') return;
+      try {
+        usersRefreshBtn.classList.add('spinning');
+        usersRefreshBtn.disabled = true;
+        const r = await apiGet('users.list');
+        if (!r.ok) { showError("Couldn't load users", r.error || 'Unknown error.'); return; }
+        renderUsers(r.users || []);
+      } catch (err) {
+        showError('Network error', err.message || 'Try again.');
+      } finally {
+        usersRefreshBtn.classList.remove('spinning');
+        usersRefreshBtn.disabled = false;
+      }
+    }
+
+    function renderUsers(users) {
+      if (!users.length) {
+        userList.innerHTML = '<div class="recent-empty">No users yet. Add the first one below.</div>';
+        return;
+      }
+      const me = session ? session.username : '';
+      userList.innerHTML = users.map((u) => {
+        const meta = [
+          u.role,
+          u.clientId ? 'id: ' + u.clientId : '',
+          u.createdAt ? 'since ' + u.createdAt : '',
+          u.active ? '' : 'deactivated'
+        ].filter(Boolean).join(' · ');
+        const isSelf = u.username.toLowerCase() === me.toLowerCase();
+        const actions = u.active
+          ? ('<button class="icon-btn" data-action="reset" data-user="' + escapeHtml(u.username) + '" aria-label="Reset password" title="Reset password">'
+              + '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12.5 2v3.5H9M1.5 12V8.5H5M11.5 5A4.5 4.5 0 0 0 3.2 4M2.5 9A4.5 4.5 0 0 0 10.8 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+              + '</button>'
+              + (isSelf ? ''
+                  : '<button class="icon-btn danger" data-action="remove" data-user="' + escapeHtml(u.username) + '" aria-label="Deactivate" title="Deactivate user">'
+                    + '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4h10M5 4V2.5h4V4M4 4l.5 8h5L10 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+                    + '</button>'))
+          : '';
+        return ''
+          + '<div class="user-row ' + (u.active ? '' : 'inactive') + '">'
+          +   '<div class="user-row-info">'
+          +     '<span class="user-row-name">' + escapeHtml(u.username) + (isSelf ? ' <span class="role-chip" style="font-size:8px;background:var(--muted-soft);">you</span>' : '') + '</span>'
+          +     '<span class="user-row-meta">' + escapeHtml(meta) + '</span>'
+          +   '</div>'
+          +   '<div class="user-row-actions">' + actions + '</div>'
+          + '</div>';
+      }).join('');
+    }
+
+    userList.addEventListener('click', async (ev) => {
+      const btn = ev.target.closest('button[data-action]');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      const username = btn.dataset.user;
+      if (action === 'reset') {
+        const np = prompt('New password for ' + username + ' (8+ chars):');
+        if (np === null) return;
+        if (np.length < 8) { showError('Too short', 'Password must be 8+ characters.'); return; }
+        try {
+          const r = await apiPost('users.resetPassword', { username: username, newPassword: np });
+          if (!r.ok) showError("Couldn't reset", r.error || 'Unknown error.');
+          else       showError('Password reset', 'Share the new password with ' + username + ' securely.');
+        } catch (err) { showError('Network error', err.message || 'Try again.'); }
+      } else if (action === 'remove') {
+        if (!confirm('Deactivate ' + username + '? Their sessions will be invalidated.')) return;
+        try {
+          const r = await apiPost('users.remove', { username: username });
+          if (!r.ok) { showError("Couldn't deactivate", r.error || 'Unknown error.'); return; }
+          await loadUsers();
+        } catch (err) { showError('Network error', err.message || 'Try again.'); }
+      }
+    });
+
+    addUserForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const role = newRoleClient.checked ? 'client' : 'admin';
+      const username = newUsernameInput.value.trim().toLowerCase();
+      const password = newPasswordInput.value;
+      const clientId = newClientIdInput.value.trim();
+      addUserBtn.disabled = true;
+      addUserBtn.querySelector('.btn-label').textContent = 'Creating';
+      try {
+        const r = await apiPost('users.add', {
+          username: username,
+          password: password,
+          role: role,
+          clientId: clientId
+        });
+        if (!r.ok) { showError("Couldn't create user", r.error || 'Unknown error.'); return; }
+        addUserForm.reset();
+        newRoleClient.checked = true;
+        updateRoleField();
+        await Promise.all([loadUsers(), loadClientsForPicker()]);
+        showError('Account created', 'Share the temporary password with the user.');
+      } catch (err) {
+        showError('Network error', err.message || 'Try again.');
+      } finally {
+        addUserBtn.disabled = false;
+        addUserBtn.querySelector('.btn-label').textContent = 'Create account';
+      }
+    });
+
+    function onShowAdmin() {
+      loadUsers();
+    }
+
+    // ============================================================
+    // ADMIN — populate the "logging on behalf of" client picker
+    // ============================================================
+    async function loadClientsForPicker() {
+      if (!session || session.role !== 'admin') return;
+      try {
+        const r = await apiGet('clients.list');
+        if (!r.ok) return;
+        const picker = document.getElementById('adminLogForClient');
+        const prev = picker.value;
+        picker.innerHTML = '<option value="" disabled selected>Select a client</option>'
+          + (r.clients || []).map((c) =>
+              '<option value="' + escapeHtml(c.clientId) + '">'
+              + escapeHtml(c.username) + ' (' + escapeHtml(c.clientId) + ')'
+              + '</option>'
+            ).join('');
+        if (prev) picker.value = prev;
+      } catch (err) { /* non-fatal */ }
+    }
+
+    // ============================================================
+    // BOOT — orchestrate auth check + per-role wiring
+    // ============================================================
+    function onAuthReady() {
+      if (!session) return;
+      applyRole(session.role);
+      if (navigator.onLine) loadDashboard();
+      if (session.role === 'admin') loadClientsForPicker();
+      // Restore saved tab now that we know the role.
+      try {
+        const saved = localStorage.getItem(ACTIVE_TAB_KEY);
+        const ok = saved === 'activity' || saved === 'statements' || saved === 'payouts'
+          || (saved === 'admin' && session.role === 'admin');
+        if (ok) setTimeout(() => switchTab(saved), 0);
+      } catch (e) { /* private mode */ }
+    }
+
+    // Page boot: if we already have a saved session, verify it with /me
+    // before showing the app — covers the case where the server-side
+    // session was invalidated (password reset, deactivation) but the
+    // localStorage entry hasn't expired yet.
+    (async function bootAuth() {
+      const saved = loadSession();
+      if (!saved) { showAuthScreen(); return; }
+      session = saved;
+      try {
+        const me = await apiGet('me');
+        if (!me.ok) { clearSession(); showAuthScreen(); return; }
+        // Re-sync any drift between localStorage and server truth.
+        session.role     = me.role;
+        session.clientId = me.clientId;
+        session.username = me.username;
+        saveSession(session);
+        hideAuthScreen();
+        onAuthReady();
+      } catch (err) {
+        // If the error was AUTH, handleAuthExpired() already cleared the
+        // session and showed the auth screen — don't undo that. Anything
+        // else (network failure, timeout) → keep the cached session and
+        // let the user into the app shell; the dashboard load will retry.
+        if (!session) return;
+        hideAuthScreen();
+        onAuthReady();
+      }
+    })();
   </script>
 
 </body>
