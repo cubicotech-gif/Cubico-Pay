@@ -1,0 +1,2193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+  <title>Danish Diary — Personal Ledger</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#1A1A2E" />
+
+  <!-- iOS PWA support -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Diary" />
+  <meta name="mobile-web-app-capable" content="yes" />
+
+  <!-- Icons -->
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400;1,9..144,500&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <!-- ====================================================================
+       CONFIGURATION
+       ENDPOINT  : Apps Script Web App URL (Deploy → Manage deployments)
+       TOKEN     : Shared secret. Must match SECRET_TOKEN in apps-script.gs.
+                   Anyone with this token + the deployed URL can read/write
+                   the ledger, so don't share either.
+       ==================================================================== -->
+  <script>
+    const CONFIG = {
+      ENDPOINT: 'PASTE_YOUR_APPS_SCRIPT_URL_HERE',
+      TOKEN:    'diary-7Nq2Pk5Hm8Rt3vXz9wL'
+    };
+  </script>
+  <!-- ==================================================================== -->
+
+  <style>
+    :root {
+      --bg: #FAF7F0;
+      --surface: #FFFFFF;
+      --ink: #1A1A2E;
+      --ink-soft: #2E2E48;
+      --muted: #6E665C;
+      --muted-soft: #9B9286;
+      --border: #ECE5D6;
+      --border-strong: #D9CFB8;
+      --accent: #C77B3D;
+      --accent-deep: #A85F25;
+      --accent-soft: rgba(199, 123, 61, 0.10);
+      --success: #3D8B5A;
+      --success-soft: rgba(61, 139, 90, 0.10);
+      --warn: #C84B1F;
+      --warn-soft: rgba(200, 75, 31, 0.10);
+      --shadow-sm: 0 1px 2px rgba(26, 26, 46, 0.05);
+      --shadow-md: 0 4px 16px rgba(26, 26, 46, 0.06), 0 1px 4px rgba(26, 26, 46, 0.04);
+      --shadow-lg: 0 24px 48px -12px rgba(26, 26, 46, 0.16), 0 8px 16px rgba(26, 26, 46, 0.04);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: 'DM Sans', -apple-system, system-ui, sans-serif;
+      font-size: 16px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      min-height: 100vh;
+    }
+
+    body {
+      background-image:
+        radial-gradient(at 80% 0%, rgba(199, 123, 61, 0.05) 0px, transparent 50%),
+        radial-gradient(at 0% 100%, rgba(26, 26, 46, 0.025) 0px, transparent 50%);
+      background-attachment: fixed;
+    }
+
+    /* ============================================================
+       LAYOUT
+       ============================================================ */
+    .container {
+      max-width: 520px;
+      margin: 0 auto;
+      padding: 32px 20px 120px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    @supports (padding: env(safe-area-inset-top)) {
+      .container {
+        padding-top: max(32px, env(safe-area-inset-top));
+        padding-bottom: max(120px, calc(env(safe-area-inset-bottom) + 96px));
+        padding-left: max(20px, env(safe-area-inset-left));
+        padding-right: max(20px, env(safe-area-inset-right));
+      }
+    }
+    @media (display-mode: standalone) {
+      .container { padding-top: max(20px, env(safe-area-inset-top)); }
+    }
+
+    /* ============================================================
+       HEADER
+       ============================================================ */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 28px;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brand-mark {
+      width: 30px; height: 30px;
+      background: var(--ink);
+      border-radius: 7px;
+      display: grid; place-items: center;
+      color: #FAE9C8;
+      font-family: 'Fraunces', serif;
+      font-style: italic;
+      font-weight: 500;
+      font-size: 18px;
+      letter-spacing: -0.02em;
+    }
+    .brand-name {
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 600;
+      font-size: 14px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--ink);
+    }
+    .header-meta {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--muted-soft);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    /* ============================================================
+       TITLE BLOCK (per view)
+       ============================================================ */
+    .title-block { margin-bottom: 24px; }
+    .eyebrow {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--accent);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .eyebrow::before {
+      content: '';
+      width: 24px; height: 1px;
+      background: var(--accent);
+    }
+    h1 {
+      font-family: 'Fraunces', serif;
+      font-weight: 400;
+      font-size: 36px;
+      line-height: 1.05;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+      margin-bottom: 8px;
+    }
+    h1 em { font-style: italic; font-weight: 400; }
+    .subtitle {
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.55;
+    }
+
+    /* ============================================================
+       VIEWS
+       ============================================================ */
+    .view { display: none; }
+    .view-active { display: block; }
+
+    /* ============================================================
+       SUMMARY CARDS (Stats view)
+       ============================================================ */
+    .stat-hero {
+      background: var(--ink);
+      color: #FAE9C8;
+      border-radius: 18px;
+      padding: 28px 24px;
+      margin-bottom: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+    .stat-hero::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--accent) 0%, var(--accent-deep) 100%);
+    }
+    .stat-hero-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: rgba(250, 233, 200, 0.6);
+      margin-bottom: 10px;
+    }
+    .stat-hero-value {
+      font-family: 'Fraunces', serif;
+      font-weight: 400;
+      font-size: 40px;
+      line-height: 1;
+      letter-spacing: -0.02em;
+    }
+    .stat-hero-value em { font-style: italic; }
+    .stat-hero-sub {
+      margin-top: 10px;
+      font-size: 13px;
+      color: rgba(250, 233, 200, 0.7);
+    }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: var(--shadow-sm);
+    }
+    .stat-card-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted-soft);
+      margin-bottom: 8px;
+    }
+    .stat-card-value {
+      font-family: 'Fraunces', serif;
+      font-size: 22px;
+      letter-spacing: -0.01em;
+      color: var(--ink);
+    }
+    .stat-card-value.warn { color: var(--warn); }
+    .stat-card-value.success { color: var(--success); }
+
+    /* Aging breakdown */
+    .aging-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 18px;
+      margin-bottom: 20px;
+    }
+    .aging-card-title {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted-soft);
+      margin-bottom: 14px;
+    }
+    .aging-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px dashed var(--border);
+    }
+    .aging-row:last-child { border-bottom: none; }
+    .aging-key {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      color: var(--ink);
+    }
+    .aging-key-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+    }
+    .aging-key-dot.fresh    { background: var(--success); }
+    .aging-key-dot.week     { background: #B89E3D; }
+    .aging-key-dot.month    { background: var(--accent); }
+    .aging-key-dot.twoMonth { background: #B05A2A; }
+    .aging-key-dot.old      { background: var(--warn); }
+    .aging-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--ink);
+    }
+
+    /* ============================================================
+       PEOPLE LIST
+       ============================================================ */
+    .people-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      margin-bottom: 14px;
+    }
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+    }
+    .section-title {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .refresh-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--muted);
+      border-radius: 8px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .refresh-btn:hover { color: var(--ink); border-color: var(--border-strong); }
+    .refresh-btn.spinning svg { animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .person-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 0.12s ease;
+    }
+    .person-row:last-child { border-bottom: none; }
+    .person-row:active { background: var(--bg); }
+    .person-avatar {
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: 'Fraunces', serif;
+      font-weight: 500;
+      font-size: 16px;
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+      border: 1px solid var(--border);
+    }
+    .person-info { flex: 1; min-width: 0; }
+    .person-name {
+      font-weight: 600;
+      font-size: 15px;
+      color: var(--ink);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-bottom: 2px;
+    }
+    .person-meta {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--muted-soft);
+      letter-spacing: 0.03em;
+    }
+    .person-amount {
+      text-align: right;
+      flex-shrink: 0;
+    }
+    .person-balance {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--ink);
+    }
+    .person-balance.positive { color: var(--warn); }
+    .person-balance.zero     { color: var(--muted-soft); }
+    .person-balance.negative { color: var(--success); }
+    .person-aging {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.04em;
+      color: var(--muted-soft);
+      margin-top: 3px;
+    }
+    .person-aging.fresh    { color: var(--success); }
+    .person-aging.week     { color: #B89E3D; }
+    .person-aging.month    { color: var(--accent); }
+    .person-aging.twoMonth { color: #B05A2A; }
+    .person-aging.old      { color: var(--warn); }
+
+    .empty-state {
+      padding: 36px 24px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .empty-state em {
+      font-family: 'Fraunces', serif;
+      font-style: italic;
+      color: var(--ink);
+    }
+
+    /* ============================================================
+       ACTIVITY LIST
+       ============================================================ */
+    .activity-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+    }
+    .activity-row:last-child { border-bottom: none; }
+    .activity-icon {
+      width: 36px; height: 36px;
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+    }
+    .activity-icon.charge {
+      background: var(--warn-soft);
+      color: var(--warn);
+    }
+    .activity-icon.repayment {
+      background: var(--success-soft);
+      color: var(--success);
+    }
+    .activity-info { flex: 1; min-width: 0; }
+    .activity-name {
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--ink);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .activity-desc {
+      font-size: 12px;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-top: 1px;
+    }
+    .activity-meta {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: var(--muted-soft);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-top: 3px;
+    }
+    .activity-amount {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    .activity-amount.charge    { color: var(--warn); }
+    .activity-amount.repayment { color: var(--success); }
+
+    /* ============================================================
+       BOTTOM TAB BAR (3 tabs + FAB)
+       ============================================================ */
+    .tabbar {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      display: flex;
+      z-index: 40;
+      box-shadow: 0 -4px 16px rgba(26, 26, 46, 0.04);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    .tab {
+      flex: 1;
+      min-height: 56px;
+      padding: 10px 12px;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted-soft);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      position: relative;
+      transition: color 0.15s ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .tab svg { display: block; }
+    .tab[aria-selected="true"] { color: var(--ink); }
+    .tab[aria-selected="true"]::after {
+      content: '';
+      position: absolute;
+      top: 0; left: 50%;
+      transform: translateX(-50%);
+      width: 28px; height: 2px;
+      background: var(--accent);
+      border-radius: 0 0 2px 2px;
+    }
+    .tab.spacer {
+      flex: 0 0 70px;
+      pointer-events: none;
+    }
+    .fab {
+      position: fixed;
+      bottom: max(20px, calc(env(safe-area-inset-bottom) + 12px));
+      left: 50%;
+      transform: translateX(-50%);
+      width: 60px; height: 60px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: white;
+      border: 3px solid var(--surface);
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      z-index: 50;
+      box-shadow: 0 6px 18px rgba(199, 123, 61, 0.4);
+      -webkit-tap-highlight-color: transparent;
+    }
+    .fab:hover { background: var(--accent-deep); }
+    .fab:active { transform: translateX(-50%) scale(0.95); }
+
+    /* ============================================================
+       DRAWER (bottom sheet) — person detail + add entry
+       ============================================================ */
+    .drawer-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(26, 26, 46, 0.45);
+      backdrop-filter: blur(2px);
+      z-index: 80;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+    .drawer-backdrop.visible { opacity: 1; pointer-events: auto; }
+    .drawer {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      background: var(--surface);
+      border-radius: 20px 20px 0 0;
+      box-shadow: 0 -16px 48px -8px rgba(26, 26, 46, 0.2);
+      z-index: 90;
+      max-height: 92vh;
+      overflow-y: auto;
+      transform: translateY(100%);
+      transition: transform 0.25s ease;
+      padding-bottom: max(20px, env(safe-area-inset-bottom));
+    }
+    .drawer.visible { transform: translateY(0); }
+    .drawer-handle {
+      width: 40px; height: 4px;
+      border-radius: 2px;
+      background: var(--border-strong);
+      margin: 10px auto 12px;
+    }
+    .drawer-head {
+      padding: 0 24px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .drawer-eyebrow {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: var(--accent);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .drawer-title {
+      font-family: 'Fraunces', serif;
+      font-size: 26px;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+      line-height: 1.1;
+    }
+    .drawer-sub {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 6px;
+    }
+    .drawer-body { padding: 18px 24px 8px; }
+    .drawer-actions {
+      display: flex;
+      gap: 10px;
+      padding: 14px 24px max(20px, env(safe-area-inset-bottom));
+      border-top: 1px solid var(--border);
+      position: sticky;
+      bottom: 0;
+      background: var(--surface);
+    }
+
+    /* Person balance block in drawer */
+    .balance-block {
+      background: var(--bg);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .balance-block-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted-soft);
+    }
+    .balance-block-value {
+      font-family: 'Fraunces', serif;
+      font-size: 28px;
+      letter-spacing: -0.01em;
+      color: var(--ink);
+    }
+    .balance-block-value.positive { color: var(--warn); }
+    .balance-block-value.zero     { color: var(--success); }
+    .balance-totals {
+      display: flex;
+      gap: 14px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+    .balance-totals span { white-space: nowrap; }
+
+    .quick-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .quick-action {
+      padding: 14px;
+      border-radius: 10px;
+      border: 1.5px solid var(--border);
+      background: var(--surface);
+      cursor: pointer;
+      text-align: left;
+      font-family: inherit;
+      -webkit-tap-highlight-color: transparent;
+      transition: border-color 0.12s ease, background 0.12s ease;
+    }
+    .quick-action:hover { border-color: var(--border-strong); }
+    .quick-action.charge-action:hover    { background: var(--warn-soft); border-color: var(--warn); }
+    .quick-action.repay-action:hover     { background: var(--success-soft); border-color: var(--success); }
+    .quick-action-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted-soft);
+      margin-bottom: 4px;
+    }
+    .quick-action-value {
+      font-family: 'Fraunces', serif;
+      font-size: 17px;
+      color: var(--ink);
+    }
+    .quick-action.charge-action .quick-action-value { color: var(--warn); }
+    .quick-action.repay-action  .quick-action-value { color: var(--success); }
+
+    .whatsapp-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      padding: 14px;
+      border-radius: 10px;
+      background: #25D366;
+      color: white;
+      border: none;
+      font-family: inherit;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      margin-bottom: 16px;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .whatsapp-btn:hover { background: #1FA957; }
+    .whatsapp-btn:disabled {
+      background: var(--border);
+      color: var(--muted-soft);
+      cursor: not-allowed;
+    }
+
+    /* Drawer ledger list */
+    .ledger-section-title {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 22px 0 8px;
+    }
+    .ledger-entry {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 0;
+      border-bottom: 1px dashed var(--border);
+    }
+    .ledger-entry:last-child { border-bottom: none; }
+    .ledger-entry-info { flex: 1; min-width: 0; }
+    .ledger-entry-amount {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .ledger-entry-amount.charge    { color: var(--warn); }
+    .ledger-entry-amount.repayment { color: var(--success); }
+    .ledger-entry-meta {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: var(--muted-soft);
+      letter-spacing: 0.04em;
+      margin-top: 2px;
+    }
+    .ledger-entry-desc {
+      font-size: 12px;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .ledger-entry-delete {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted-soft);
+      width: 28px; height: 28px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .ledger-entry-delete:hover { border-color: var(--warn); color: var(--warn); }
+
+    .person-meta-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+    .person-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+    }
+    .person-chip.archived { color: var(--warn); border-color: var(--warn); }
+
+    /* ============================================================
+       MODAL (centered) — add entry, add person, edit person
+       ============================================================ */
+    .modal-card {
+      position: fixed;
+      left: 50%; top: 50%;
+      transform: translate(-50%, -50%) scale(0.96);
+      width: calc(100% - 32px);
+      max-width: 400px;
+      background: var(--surface);
+      border-radius: 16px;
+      box-shadow: var(--shadow-lg);
+      z-index: 95;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.18s ease, transform 0.18s ease;
+      overflow: hidden;
+      max-height: 92vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .modal-card.visible {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translate(-50%, -50%) scale(1);
+    }
+    .modal-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--accent) 0%, var(--accent-deep) 100%);
+    }
+    .modal-head {
+      padding: 24px 24px 8px;
+      flex-shrink: 0;
+    }
+    .modal-body {
+      padding: 12px 24px 4px;
+      overflow-y: auto;
+    }
+    .modal-actions {
+      display: flex;
+      gap: 10px;
+      padding: 16px 24px max(20px, env(safe-area-inset-bottom));
+      flex-shrink: 0;
+      border-top: 1px solid var(--border);
+    }
+
+    /* ============================================================
+       FORM CONTROLS
+       ============================================================ */
+    .field { margin-bottom: 16px; }
+    .field-label {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .field-label label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--ink);
+    }
+    .field-label .hint {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: var(--muted-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .input, .select, .textarea {
+      width: 100%;
+      padding: 12px 14px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 15px;
+      color: var(--ink);
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+    .input::placeholder { color: var(--muted-soft); }
+    .input:hover, .select:hover, .textarea:hover { border-color: var(--border-strong); }
+    .input:focus, .select:focus, .textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 4px var(--accent-soft);
+    }
+    .textarea {
+      resize: vertical;
+      min-height: 70px;
+      font-family: inherit;
+    }
+    .amount-wrapper { position: relative; }
+    .amount-prefix {
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 500;
+      font-size: 16px;
+      color: var(--muted);
+      pointer-events: none;
+    }
+    .amount-wrapper .input { padding-left: 38px; }
+
+    .select-wrapper {
+      position: relative;
+    }
+    .select-wrapper::after {
+      content: '';
+      position: absolute;
+      right: 14px;
+      top: 50%;
+      width: 8px;
+      height: 8px;
+      transform: translateY(-65%) rotate(45deg);
+      border-right: 1.5px solid var(--muted);
+      border-bottom: 1.5px solid var(--muted);
+      pointer-events: none;
+    }
+    .select { padding-right: 36px; cursor: pointer; }
+
+    /* Type toggle (charge / repayment) */
+    .type-toggle {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .type-option input { display: none; }
+    .type-option label {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 14px;
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all 0.12s ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .type-option .label-name {
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--ink);
+    }
+    .type-option .label-hint {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      color: var(--muted-soft);
+      text-transform: uppercase;
+    }
+    .type-option.charge label:hover { border-color: var(--warn); }
+    .type-option.repay label:hover  { border-color: var(--success); }
+    .type-option.charge input:checked + label {
+      border-color: var(--warn);
+      background: var(--warn-soft);
+    }
+    .type-option.repay input:checked + label {
+      border-color: var(--success);
+      background: var(--success-soft);
+    }
+
+    /* ============================================================
+       BUTTONS
+       ============================================================ */
+    .btn {
+      flex: 1;
+      padding: 14px 16px;
+      border-radius: 10px;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:hover { background: var(--accent-deep); }
+    .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+    .btn-ghost {
+      background: transparent;
+      color: var(--ink);
+      border: 1.5px solid var(--border-strong);
+    }
+    .btn-ghost:hover { background: var(--bg); }
+    .btn-danger {
+      background: transparent;
+      color: var(--warn);
+      border: 1.5px solid var(--warn);
+    }
+    .btn-danger:hover { background: var(--warn-soft); }
+    .btn-block { width: 100%; flex: none; }
+
+    .spinner {
+      width: 14px; height: 14px;
+      border: 2px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+
+    /* ============================================================
+       TOAST
+       ============================================================ */
+    .toast {
+      position: fixed;
+      left: 16px; right: 16px;
+      top: max(16px, env(safe-area-inset-top));
+      max-width: 480px;
+      margin: 0 auto;
+      background: var(--surface);
+      border: 1.5px solid var(--warn);
+      border-radius: 12px;
+      padding: 14px 16px;
+      display: none;
+      align-items: flex-start;
+      gap: 12px;
+      box-shadow: 0 12px 32px rgba(200, 75, 31, 0.18);
+      z-index: 110;
+      animation: slideDownToast 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .toast.visible { display: flex; }
+    .toast.success { border-color: var(--success); box-shadow: 0 12px 32px rgba(61, 139, 90, 0.18); }
+    @keyframes slideDownToast {
+      from { transform: translateY(-20px); opacity: 0; }
+      to   { transform: translateY(0); opacity: 1; }
+    }
+    .toast-icon {
+      width: 24px; height: 24px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      display: grid;
+      place-items: center;
+      background: var(--warn);
+      color: white;
+    }
+    .toast.success .toast-icon { background: var(--success); }
+    .toast .toast-icon-success { display: none; }
+    .toast.success .toast-icon-error { display: none; }
+    .toast.success .toast-icon-success { display: block; }
+    .toast-text { flex: 1; min-width: 0; }
+    .toast-title { font-size: 13px; font-weight: 600; color: var(--ink); margin-bottom: 2px; }
+    .toast-msg   { font-size: 12px; color: var(--muted); line-height: 1.4; word-break: break-word; }
+    .toast-close {
+      background: transparent;
+      border: none;
+      color: var(--muted-soft);
+      cursor: pointer;
+      padding: 4px;
+      flex-shrink: 0;
+    }
+
+    /* ============================================================
+       OFFLINE
+       ============================================================ */
+    .offline-bar {
+      position: fixed;
+      bottom: max(96px, calc(env(safe-area-inset-bottom) + 76px));
+      left: 16px; right: 16px;
+      background: var(--ink);
+      color: white;
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-size: 12px;
+      text-align: center;
+      z-index: 70;
+      display: none;
+      max-width: 320px;
+      margin: 0 auto;
+    }
+    .offline-bar.visible { display: block; }
+
+    /* ============================================================
+       SKELETON
+       ============================================================ */
+    .skeleton {
+      display: inline-block;
+      background: linear-gradient(90deg, var(--border) 0%, var(--bg) 50%, var(--border) 100%);
+      background-size: 200% 100%;
+      animation: skeletonPulse 1.4s ease-in-out infinite;
+      border-radius: 6px;
+      color: transparent;
+    }
+    @keyframes skeletonPulse {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* ============================================================
+       FOOTER
+       ============================================================ */
+    .footer {
+      margin-top: auto;
+      padding-top: 32px;
+      text-align: center;
+    }
+    .footer-text {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted-soft);
+    }
+    .footer-text em {
+      font-family: 'Fraunces', serif;
+      font-style: italic;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    /* ============================================================
+       RESPONSIVE
+       ============================================================ */
+    @media (max-width: 480px) {
+      .container { padding: 20px 16px 110px; }
+      h1 { font-size: 30px; }
+      .stat-hero-value { font-size: 34px; }
+      .input, .select, .textarea { font-size: 16px !important; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+
+    <header class="header">
+      <div class="brand">
+        <div class="brand-mark">D</div>
+        <span class="brand-name">Danish Diary</span>
+      </div>
+      <div class="header-meta" id="todayDate"></div>
+    </header>
+
+    <!-- ============================================================
+         PEOPLE VIEW (default)
+         ============================================================ -->
+    <section class="view view-active" id="peopleView" role="tabpanel" aria-labelledby="tabPeople">
+      <div class="title-block">
+        <div class="eyebrow">Khata</div>
+        <h1>People who <em>owe</em> you</h1>
+        <p class="subtitle">Sorted by oldest unpaid. Tap any name to see the full ledger and log a charge or repayment.</p>
+      </div>
+
+      <div class="people-section">
+        <div class="section-header">
+          <span class="section-title">Active accounts</span>
+          <button class="refresh-btn" id="peopleRefreshBtn" type="button" aria-label="Refresh">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+              <path d="M12.5 2v3.5H9M1.5 12V8.5H5M11.5 5A4.5 4.5 0 0 0 3.2 4M2.5 9A4.5 4.5 0 0 0 10.8 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+        <div id="peopleList">
+          <div class="person-row">
+            <div class="person-avatar"><span class="skeleton">A</span></div>
+            <div class="person-info">
+              <div class="person-name"><span class="skeleton">Loading name</span></div>
+              <div class="person-meta"><span class="skeleton">days · phone</span></div>
+            </div>
+            <div class="person-amount">
+              <div class="person-balance"><span class="skeleton">₨0,000</span></div>
+              <div class="person-aging"><span class="skeleton">days</span></div>
+            </div>
+          </div>
+          <div class="person-row">
+            <div class="person-avatar"><span class="skeleton">B</span></div>
+            <div class="person-info">
+              <div class="person-name"><span class="skeleton">Loading name</span></div>
+              <div class="person-meta"><span class="skeleton">days · phone</span></div>
+            </div>
+            <div class="person-amount">
+              <div class="person-balance"><span class="skeleton">₨0,000</span></div>
+              <div class="person-aging"><span class="skeleton">days</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="people-section" id="archivedSection" style="display:none;">
+        <div class="section-header">
+          <span class="section-title">Archived</span>
+          <button class="refresh-btn" id="toggleArchivedBtn" type="button">
+            <span id="toggleArchivedLabel">Show</span>
+          </button>
+        </div>
+        <div id="archivedList" style="display:none;"></div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         ACTIVITY VIEW
+         ============================================================ -->
+    <section class="view" id="activityView" role="tabpanel" aria-labelledby="tabActivity">
+      <div class="title-block">
+        <div class="eyebrow">Activity</div>
+        <h1>Latest <em>movements</em></h1>
+        <p class="subtitle">Every charge and repayment across all people, newest first.</p>
+      </div>
+
+      <div class="people-section">
+        <div class="section-header">
+          <span class="section-title">Recent entries</span>
+          <button class="refresh-btn" id="activityRefreshBtn" type="button" aria-label="Refresh activity">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+              <path d="M12.5 2v3.5H9M1.5 12V8.5H5M11.5 5A4.5 4.5 0 0 0 3.2 4M2.5 9A4.5 4.5 0 0 0 10.8 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+        <div id="activityList">
+          <div class="activity-row">
+            <div class="activity-icon charge"><span class="skeleton">↑</span></div>
+            <div class="activity-info">
+              <div class="activity-name"><span class="skeleton">Loading</span></div>
+              <div class="activity-meta"><span class="skeleton">date</span></div>
+            </div>
+            <div class="activity-amount"><span class="skeleton">₨0,000</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         STATS VIEW
+         ============================================================ -->
+    <section class="view" id="statsView" role="tabpanel" aria-labelledby="tabStats">
+      <div class="title-block">
+        <div class="eyebrow">Stats</div>
+        <h1>Total <em>outstanding</em></h1>
+        <p class="subtitle">What you're owed in aggregate, broken down by how long it's been unpaid.</p>
+      </div>
+
+      <div class="stat-hero">
+        <div class="stat-hero-label">Total people owe you</div>
+        <div class="stat-hero-value" id="heroTotal"><span class="skeleton">₨000,000</span></div>
+        <div class="stat-hero-sub" id="heroSub">across — people</div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-card-label">Total people</div>
+          <div class="stat-card-value" id="statTotalPeople"><span class="skeleton">00</span></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card-label">With balance</div>
+          <div class="stat-card-value warn" id="statWithBalance"><span class="skeleton">00</span></div>
+        </div>
+      </div>
+
+      <div class="aging-card">
+        <div class="aging-card-title">Aging breakdown</div>
+        <div id="agingList">
+          <div class="aging-row">
+            <div class="aging-key"><span class="aging-key-dot fresh"></span>0 – 7 days</div>
+            <div class="aging-val"><span class="skeleton">0</span></div>
+          </div>
+          <div class="aging-row">
+            <div class="aging-key"><span class="aging-key-dot week"></span>8 – 30 days</div>
+            <div class="aging-val"><span class="skeleton">0</span></div>
+          </div>
+          <div class="aging-row">
+            <div class="aging-key"><span class="aging-key-dot month"></span>31 – 60 days</div>
+            <div class="aging-val"><span class="skeleton">0</span></div>
+          </div>
+          <div class="aging-row">
+            <div class="aging-key"><span class="aging-key-dot twoMonth"></span>61 – 90 days</div>
+            <div class="aging-val"><span class="skeleton">0</span></div>
+          </div>
+          <div class="aging-row">
+            <div class="aging-key"><span class="aging-key-dot old"></span>90+ days</div>
+            <div class="aging-val"><span class="skeleton">0</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <p class="footer-text">Personal · <em>diary</em> · v1</p>
+    </footer>
+
+  </div>
+
+  <!-- ============================================================
+       BOTTOM TAB BAR
+       ============================================================ -->
+  <nav class="tabbar" role="tablist" aria-label="Primary">
+    <button class="tab" id="tabPeople" type="button" role="tab" aria-selected="true" aria-controls="peopleView" data-tab="people">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="9" cy="8" r="3.2" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M3 19c.6-3 3-5 6-5s5.4 2 6 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        <circle cx="17" cy="9" r="2.4" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M14.5 17c.4-1.6 1.7-2.8 3.5-2.8s3.1 1.2 3.5 2.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      <span>People</span>
+    </button>
+    <button class="tab spacer" tabindex="-1" aria-hidden="true"></button>
+    <button class="tab" id="tabActivity" type="button" role="tab" aria-selected="false" aria-controls="activityView" data-tab="activity">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M3 12h4l2-6 4 12 2-6h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>Activity</span>
+    </button>
+    <button class="tab" id="tabStats" type="button" role="tab" aria-selected="false" aria-controls="statsView" data-tab="stats">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M4 20V10M10 20V4M16 20v-8M22 20H2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      <span>Stats</span>
+    </button>
+  </nav>
+
+  <button class="fab" id="fabBtn" type="button" aria-label="Add entry">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+      <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+    </svg>
+  </button>
+
+  <!-- ============================================================
+       SHARED BACKDROP — drawers + modals dim through this
+       ============================================================ -->
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+
+  <!-- ============================================================
+       PERSON DETAIL DRAWER
+       ============================================================ -->
+  <div class="drawer" id="personDrawer" role="dialog" aria-modal="true" aria-labelledby="personDrawerTitle">
+    <div class="drawer-handle"></div>
+    <div class="drawer-head">
+      <div class="drawer-eyebrow" id="personDrawerEyebrow">Person</div>
+      <div class="drawer-title" id="personDrawerTitle">—</div>
+      <div class="person-meta-row" id="personDrawerMetaRow"></div>
+    </div>
+    <div class="drawer-body">
+      <div class="balance-block">
+        <div>
+          <div class="balance-block-label">Current balance</div>
+          <div class="balance-block-value" id="personBalance">—</div>
+          <div class="balance-totals" id="personTotals">
+            <span>Charged: <strong id="personTotalCharged">—</strong></span>
+            <span>Repaid: <strong id="personTotalRepaid">—</strong></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="quick-actions">
+        <button type="button" class="quick-action charge-action" id="personAddChargeBtn">
+          <div class="quick-action-label">+ Add charge</div>
+          <div class="quick-action-value">They borrowed</div>
+        </button>
+        <button type="button" class="quick-action repay-action" id="personAddRepayBtn">
+          <div class="quick-action-label">+ Add repayment</div>
+          <div class="quick-action-value">They paid back</div>
+        </button>
+      </div>
+
+      <button type="button" class="whatsapp-btn" id="personWhatsappBtn" disabled>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M20.5 3.4A11.8 11.8 0 0 0 12 0C5.4 0 .1 5.3.1 11.9c0 2.1.6 4.1 1.6 5.9L0 24l6.3-1.7c1.7.9 3.7 1.4 5.7 1.4 6.6 0 11.9-5.3 11.9-11.9 0-3.2-1.2-6.2-3.4-8.4zM12 21.8c-1.8 0-3.6-.5-5.2-1.4l-.4-.2-3.7 1 1-3.6-.2-.4a9.8 9.8 0 0 1-1.5-5.3C2 6.5 6.5 2 12 2s10 4.5 10 9.9-4.5 9.9-10 9.9zm5.5-7.4c-.3-.2-1.8-.9-2-1-.3-.1-.5-.2-.7.2-.2.3-.8 1-.9 1.2-.2.2-.3.2-.6.1s-1.3-.5-2.4-1.5c-.9-.8-1.5-1.8-1.7-2.1-.2-.3 0-.5.1-.6.1-.1.3-.4.5-.5.2-.2.2-.3.3-.5.1-.2 0-.4 0-.5l-.7-1.7c-.2-.5-.4-.4-.5-.4h-.5c-.2 0-.4 0-.6.3-.2.2-.8.8-.8 2s.8 2.3.9 2.5c.1.2 1.7 2.5 4 3.6 1.5.7 2.1.7 2.8.6.4 0 1.4-.6 1.6-1.1.2-.6.2-1 .1-1.1 0-.2-.2-.2-.5-.3z"/>
+        </svg>
+        <span id="personWhatsappLabel">Send WhatsApp reminder</span>
+      </button>
+
+      <div class="ledger-section-title">Ledger</div>
+      <div id="personLedger">
+        <div class="empty-state">Loading entries…</div>
+      </div>
+    </div>
+    <div class="drawer-actions">
+      <button type="button" class="btn btn-ghost" id="personEditBtn">Edit details</button>
+      <button type="button" class="btn btn-danger" id="personArchiveBtn">Archive</button>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       ADD ENTRY MODAL
+       ============================================================ -->
+  <div class="modal-card" id="addEntryModal" role="dialog" aria-modal="true" aria-labelledby="addEntryTitle">
+    <div class="modal-head">
+      <div class="drawer-eyebrow">New entry</div>
+      <div class="drawer-title" id="addEntryTitle">Log a transaction</div>
+    </div>
+    <form id="addEntryForm" class="modal-body" autocomplete="off">
+      <div class="field">
+        <div class="field-label">
+          <label>Type</label>
+        </div>
+        <div class="type-toggle">
+          <div class="type-option charge">
+            <input type="radio" name="entryType" id="entryTypeCharge" value="charge" checked />
+            <label for="entryTypeCharge">
+              <span class="label-name">Charge</span>
+              <span class="label-hint">They borrowed</span>
+            </label>
+          </div>
+          <div class="type-option repay">
+            <input type="radio" name="entryType" id="entryTypeRepay" value="repayment" />
+            <label for="entryTypeRepay">
+              <span class="label-name">Repayment</span>
+              <span class="label-hint">They paid back</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="field" id="personPickerField">
+        <div class="field-label">
+          <label for="entryPerson">Person</label>
+          <button type="button" id="newPersonBtn" style="background:transparent;border:none;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--accent);letter-spacing:0.06em;text-transform:uppercase;cursor:pointer;">+ New person</button>
+        </div>
+        <div class="select-wrapper">
+          <select id="entryPerson" class="select" required>
+            <option value="" disabled selected>Pick a person</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <label for="entryAmount">Amount</label>
+          <span class="hint">PKR</span>
+        </div>
+        <div class="amount-wrapper">
+          <span class="amount-prefix">₨</span>
+          <input type="number" inputmode="decimal" step="0.01" min="0.01" id="entryAmount" class="input" placeholder="0" required />
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <label for="entryDate">Date</label>
+          <span class="hint">Required</span>
+        </div>
+        <input type="date" id="entryDate" class="input" required />
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <label for="entryDescription">Note</label>
+          <span class="hint">Optional</span>
+        </div>
+        <input type="text" id="entryDescription" class="input" placeholder="e.g. for grocery, partial payment" />
+      </div>
+    </form>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="addEntryCancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="addEntrySave">Save entry</button>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       ADD / EDIT PERSON MODAL
+       ============================================================ -->
+  <div class="modal-card" id="personModal" role="dialog" aria-modal="true" aria-labelledby="personModalTitle">
+    <div class="modal-head">
+      <div class="drawer-eyebrow" id="personModalEyebrow">New person</div>
+      <div class="drawer-title" id="personModalTitle">Add a person</div>
+    </div>
+    <form id="personForm" class="modal-body" autocomplete="off">
+      <input type="hidden" id="personFormId" />
+      <div class="field">
+        <div class="field-label">
+          <label for="personFormName">Name</label>
+          <span class="hint">Required</span>
+        </div>
+        <input type="text" id="personFormName" class="input" placeholder="e.g. Aslam Bhai" required />
+      </div>
+      <div class="field">
+        <div class="field-label">
+          <label for="personFormPhone">Phone (with country code)</label>
+          <span class="hint">For WhatsApp</span>
+        </div>
+        <input type="tel" id="personFormPhone" class="input" placeholder="e.g. 923001234567" inputmode="numeric" />
+      </div>
+      <div class="field">
+        <div class="field-label">
+          <label for="personFormNotes">Notes</label>
+          <span class="hint">Optional</span>
+        </div>
+        <textarea id="personFormNotes" class="textarea" placeholder="Anything to remember about them"></textarea>
+      </div>
+    </form>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="personFormCancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="personFormSave">Save person</button>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       TOAST
+       ============================================================ -->
+  <div class="toast" id="toast" role="alert">
+    <div class="toast-icon">
+      <svg class="toast-icon-error" width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <path d="M7 4V8M7 10.5V10.5M1.5 12H12.5L7 1.5L1.5 12Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <svg class="toast-icon-success" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+        <path d="M2.5 7l3 3 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div class="toast-text">
+      <div class="toast-title" id="toastTitle">—</div>
+      <div class="toast-msg" id="toastMsg">—</div>
+    </div>
+    <button class="toast-close" id="toastClose" aria-label="Dismiss">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <path d="M3 3L11 11M11 3L3 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+    </button>
+  </div>
+
+  <div class="offline-bar" id="offlineBar">You're offline — changes won't save until you reconnect</div>
+
+  <script>
+    'use strict';
+
+    // ============================================================
+    // INIT
+    // ============================================================
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    const todayIso = `${yyyy}-${mm}-${dd}`;
+    document.getElementById('todayDate').textContent = `${dd}.${mm}.${yyyy}`;
+
+    // ============================================================
+    // API HELPERS
+    // ============================================================
+    async function apiPost(action, payload, opts) {
+      opts = opts || {};
+      const body = Object.assign({ action: action, token: CONFIG.TOKEN }, payload || {});
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), opts.timeoutMs || 30000);
+      try {
+        const res = await fetch(CONFIG.ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(body),
+          redirect: 'follow',
+          signal: controller.signal
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return await res.json();
+      } finally { clearTimeout(timer); }
+    }
+
+    async function apiGet(action, params, opts) {
+      opts = opts || {};
+      const qs = new URLSearchParams(Object.assign(
+        { action: action, token: CONFIG.TOKEN, _: String(Date.now()) },
+        params || {}
+      ));
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), opts.timeoutMs || 20000);
+      try {
+        const res = await fetch(CONFIG.ENDPOINT + '?' + qs.toString(), {
+          signal: controller.signal,
+          redirect: 'follow',
+          cache: 'no-store'
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return await res.json();
+      } finally { clearTimeout(timer); }
+    }
+
+    // ============================================================
+    // TOAST
+    // ============================================================
+    const toast = document.getElementById('toast');
+    const toastTitle = document.getElementById('toastTitle');
+    const toastMsg = document.getElementById('toastMsg');
+    let toastTimer = null;
+    function showError(title, message) {
+      toast.classList.remove('success');
+      toastTitle.textContent = title;
+      toastMsg.textContent = message;
+      toast.classList.add('visible');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('visible'), 5000);
+    }
+    function showSuccess(title, message) {
+      toast.classList.add('success');
+      toastTitle.textContent = title;
+      toastMsg.textContent = message;
+      toast.classList.add('visible');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('visible'), 3500);
+    }
+    document.getElementById('toastClose').addEventListener('click', () => {
+      toast.classList.remove('visible');
+      clearTimeout(toastTimer);
+    });
+
+    // ============================================================
+    // TAB SWITCHING
+    // ============================================================
+    const ACTIVE_TAB_KEY = 'danish-diary-active-tab';
+    const tabButtons = document.querySelectorAll('.tab[data-tab]');
+    const views = {
+      people:   document.getElementById('peopleView'),
+      activity: document.getElementById('activityView'),
+      stats:    document.getElementById('statsView'),
+    };
+    let currentTab = 'people';
+    function switchTab(name) {
+      if (!views[name] || currentTab === name) return;
+      currentTab = name;
+      Object.entries(views).forEach(([k, el]) => el.classList.toggle('view-active', k === name));
+      tabButtons.forEach((btn) => btn.setAttribute('aria-selected', btn.dataset.tab === name ? 'true' : 'false'));
+      try { localStorage.setItem(ACTIVE_TAB_KEY, name); } catch (e) {}
+    }
+    tabButtons.forEach((btn) => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
+    try {
+      const saved = localStorage.getItem(ACTIVE_TAB_KEY);
+      if (saved === 'activity' || saved === 'stats') setTimeout(() => switchTab(saved), 0);
+    } catch (e) {}
+
+    // ============================================================
+    // DASHBOARD STATE
+    // ============================================================
+    const dashboardCache = { data: null };
+    let dashboardLoading = false;
+
+    const peopleList     = document.getElementById('peopleList');
+    const archivedList   = document.getElementById('archivedList');
+    const archivedSection= document.getElementById('archivedSection');
+    const toggleArchivedBtn = document.getElementById('toggleArchivedBtn');
+    const toggleArchivedLabel = document.getElementById('toggleArchivedLabel');
+    const activityList   = document.getElementById('activityList');
+    const peopleRefreshBtn   = document.getElementById('peopleRefreshBtn');
+    const activityRefreshBtn = document.getElementById('activityRefreshBtn');
+
+    peopleRefreshBtn.addEventListener('click', () => loadDashboard());
+    activityRefreshBtn.addEventListener('click', () => loadDashboard());
+
+    function setRefreshSpinning(on) {
+      [peopleRefreshBtn, activityRefreshBtn].forEach((b) => {
+        b.classList.toggle('spinning', on);
+        b.disabled = on;
+      });
+    }
+
+    async function loadDashboard() {
+      if (dashboardLoading) return;
+      dashboardLoading = true;
+      setRefreshSpinning(true);
+      try {
+        if (!CONFIG.ENDPOINT || CONFIG.ENDPOINT.includes('PASTE_YOUR')) {
+          throw new Error('Set CONFIG.ENDPOINT in index.html to your Apps Script URL.');
+        }
+        const j = await apiGet('dashboard');
+        if (!j.ok) throw new Error(j.error || 'Dashboard error');
+        dashboardCache.data = j;
+        renderPeople(j.people || []);
+        renderActivity(j.recent || []);
+        renderStats(j.summary || {});
+        populatePersonPicker(j.people || []);
+      } catch (err) {
+        const msg = (err && err.name === 'AbortError')
+          ? 'Request timed out — check your connection.'
+          : (err && err.message) || String(err);
+        showError("Couldn't load data", msg);
+      } finally {
+        dashboardLoading = false;
+        setRefreshSpinning(false);
+      }
+    }
+
+    if (navigator.onLine) loadDashboard();
+
+    // ============================================================
+    // RENDERING — people list
+    // ============================================================
+    function renderPeople(people) {
+      const active = people.filter((p) => !p.archived);
+      const archived = people.filter((p) => p.archived);
+
+      if (active.length === 0) {
+        peopleList.innerHTML = '<div class="empty-state"><em>Nothing on the books.</em><br>Tap the + button to add your first entry.</div>';
+      } else {
+        peopleList.innerHTML = active.map(personRowHtml).join('');
+      }
+
+      if (archived.length > 0) {
+        archivedSection.style.display = '';
+        archivedList.innerHTML = archived.map(personRowHtml).join('');
+      } else {
+        archivedSection.style.display = 'none';
+      }
+    }
+
+    function personRowHtml(p) {
+      const balance = Number(p.balance) || 0;
+      const balanceClass = balance > 0 ? 'positive' : (balance < 0 ? 'negative' : 'zero');
+      const balanceText  = balance >= 0 ? formatPKR(balance) : '-' + formatPKR(Math.abs(balance));
+      const agingBucket  = balance > 0 ? bucketFor(p.daysSincePayment) : 'zero';
+      const agingLabel   = balance > 0
+        ? relativeDays(p.daysSincePayment)
+        : (balance < 0 ? 'overpaid' : 'settled');
+      const initials = initialsFor(p.name);
+      const phoneBit = p.phone ? ' · ' + escapeHtml(p.phone) : '';
+      return ''
+        + '<div class="person-row" data-person-id="' + escapeHtml(p.personId) + '">'
+        +   '<div class="person-avatar">' + escapeHtml(initials) + '</div>'
+        +   '<div class="person-info">'
+        +     '<div class="person-name">' + escapeHtml(p.name || '—') + '</div>'
+        +     '<div class="person-meta">' + p.entryCount + (p.entryCount === 1 ? ' entry' : ' entries') + phoneBit + '</div>'
+        +   '</div>'
+        +   '<div class="person-amount">'
+        +     '<div class="person-balance ' + balanceClass + '">' + balanceText + '</div>'
+        +     '<div class="person-aging ' + agingBucket + '">' + escapeHtml(agingLabel) + '</div>'
+        +   '</div>'
+        + '</div>';
+    }
+
+    peopleList.addEventListener('click', (ev) => {
+      const row = ev.target.closest('.person-row');
+      if (row) openPersonDrawer(row.dataset.personId);
+    });
+    archivedList.addEventListener('click', (ev) => {
+      const row = ev.target.closest('.person-row');
+      if (row) openPersonDrawer(row.dataset.personId);
+    });
+    toggleArchivedBtn.addEventListener('click', () => {
+      const showing = archivedList.style.display !== 'none';
+      archivedList.style.display = showing ? 'none' : '';
+      toggleArchivedLabel.textContent = showing ? 'Show' : 'Hide';
+    });
+
+    // ============================================================
+    // RENDERING — activity feed
+    // ============================================================
+    function renderActivity(entries) {
+      if (!entries.length) {
+        activityList.innerHTML = '<div class="empty-state"><em>No activity yet.</em><br>Add your first entry from the + button.</div>';
+        return;
+      }
+      activityList.innerHTML = entries.map(activityRowHtml).join('');
+    }
+
+    function activityRowHtml(e) {
+      const isCharge = e.type === 'charge';
+      const sign = isCharge ? '+' : '-';
+      const arrow = isCharge ? '↑' : '↓';
+      const cls = isCharge ? 'charge' : 'repayment';
+      const desc = e.description ? '<div class="activity-desc">' + escapeHtml(e.description) + '</div>' : '';
+      return ''
+        + '<div class="activity-row">'
+        +   '<div class="activity-icon ' + cls + '">' + arrow + '</div>'
+        +   '<div class="activity-info">'
+        +     '<div class="activity-name">' + escapeHtml(e.personName) + '</div>'
+        +     desc
+        +     '<div class="activity-meta">' + escapeHtml(e.date) + ' · ' + (isCharge ? 'charge' : 'repayment') + '</div>'
+        +   '</div>'
+        +   '<div class="activity-amount ' + cls + '">' + sign + formatPKR(e.amount) + '</div>'
+        + '</div>';
+    }
+
+    // ============================================================
+    // RENDERING — stats
+    // ============================================================
+    function renderStats(s) {
+      const hero = document.getElementById('heroTotal');
+      const sub = document.getElementById('heroSub');
+      hero.textContent = formatPKR(s.totalOutstanding || 0);
+      sub.textContent = 'across ' + (s.peopleWithBalance || 0) + ' ' + ((s.peopleWithBalance || 0) === 1 ? 'person' : 'people');
+      document.getElementById('statTotalPeople').textContent = String(s.totalPeople || 0);
+      document.getElementById('statWithBalance').textContent = String(s.peopleWithBalance || 0);
+
+      const aging = s.aging || {};
+      const buckets = [
+        { key: 'fresh',    label: '0 – 7 days' },
+        { key: 'week',     label: '8 – 30 days' },
+        { key: 'month',    label: '31 – 60 days' },
+        { key: 'twoMonth', label: '61 – 90 days' },
+        { key: 'old',      label: '90+ days' },
+      ];
+      document.getElementById('agingList').innerHTML = buckets.map((b) =>
+        '<div class="aging-row">'
+        + '<div class="aging-key"><span class="aging-key-dot ' + b.key + '"></span>' + escapeHtml(b.label) + '</div>'
+        + '<div class="aging-val">' + (aging[b.key] || 0) + '</div>'
+        + '</div>'
+      ).join('');
+    }
+
+    // ============================================================
+    // PERSON DRAWER
+    // ============================================================
+    const personDrawer = document.getElementById('personDrawer');
+    const backdrop = document.getElementById('drawerBackdrop');
+    const personDrawerTitle = document.getElementById('personDrawerTitle');
+    const personDrawerMetaRow = document.getElementById('personDrawerMetaRow');
+    const personBalance = document.getElementById('personBalance');
+    const personTotalCharged = document.getElementById('personTotalCharged');
+    const personTotalRepaid = document.getElementById('personTotalRepaid');
+    const personLedger = document.getElementById('personLedger');
+    const personWhatsappBtn = document.getElementById('personWhatsappBtn');
+    const personWhatsappLabel = document.getElementById('personWhatsappLabel');
+    const personAddChargeBtn = document.getElementById('personAddChargeBtn');
+    const personAddRepayBtn = document.getElementById('personAddRepayBtn');
+    const personEditBtn = document.getElementById('personEditBtn');
+    const personArchiveBtn = document.getElementById('personArchiveBtn');
+
+    let currentPerson = null; // populated when drawer opens
+
+    async function openPersonDrawer(personId) {
+      // Find person in cache first for instant render
+      const cached = (dashboardCache.data?.people || []).find((p) => p.personId === personId);
+      if (cached) {
+        currentPerson = cached;
+        renderPersonHeader(cached);
+        personLedger.innerHTML = '<div class="empty-state">Loading entries…</div>';
+      }
+      backdrop.classList.add('visible');
+      personDrawer.classList.add('visible');
+
+      // Fetch full ledger
+      try {
+        const r = await apiGet('person', { personId: personId });
+        if (!r.ok) throw new Error(r.error || 'Unknown error');
+        currentPerson = Object.assign({}, currentPerson || {}, r.person);
+        renderPersonHeader(currentPerson);
+        renderPersonLedger(currentPerson.entries || []);
+      } catch (err) {
+        showError("Couldn't load person", err.message || 'Try again.');
+      }
+    }
+
+    function renderPersonHeader(p) {
+      personDrawerTitle.textContent = p.name || '—';
+      const chips = [];
+      if (p.phone)    chips.push('<span class="person-chip">📱 ' + escapeHtml(p.phone) + '</span>');
+      if (p.archived) chips.push('<span class="person-chip archived">archived</span>');
+      if (p.notes)    chips.push('<span class="person-chip" style="max-width:240px;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(p.notes) + '</span>');
+      personDrawerMetaRow.innerHTML = chips.join('');
+      const bal = Number(p.balance) || 0;
+      personBalance.textContent = bal >= 0 ? formatPKR(bal) : '-' + formatPKR(Math.abs(bal));
+      personBalance.className = 'balance-block-value ' + (bal > 0 ? 'positive' : 'zero');
+      personTotalCharged.textContent = formatPKR(p.totalCharged || 0);
+      personTotalRepaid.textContent = formatPKR(p.totalRepaid || 0);
+
+      // WhatsApp button
+      if (p.phone) {
+        personWhatsappBtn.disabled = false;
+        personWhatsappLabel.textContent = bal > 0
+          ? 'Send WhatsApp reminder'
+          : 'Send WhatsApp message';
+      } else {
+        personWhatsappBtn.disabled = true;
+        personWhatsappLabel.textContent = 'Add phone to send a reminder';
+      }
+
+      personArchiveBtn.textContent = p.archived ? 'Unarchive' : 'Archive';
+    }
+
+    function renderPersonLedger(entries) {
+      if (!entries.length) {
+        personLedger.innerHTML = '<div class="empty-state">No entries yet for this person.</div>';
+        return;
+      }
+      personLedger.innerHTML = entries.map((e) => {
+        const isCharge = e.type === 'charge';
+        const sign = isCharge ? '+' : '-';
+        const cls = isCharge ? 'charge' : 'repayment';
+        const desc = e.description ? '<div class="ledger-entry-desc">' + escapeHtml(e.description) + '</div>' : '';
+        return ''
+          + '<div class="ledger-entry">'
+          +   '<div class="ledger-entry-info">'
+          +     desc
+          +     '<div class="ledger-entry-meta">' + escapeHtml(e.date) + ' · ' + (isCharge ? 'charge' : 'repayment') + '</div>'
+          +   '</div>'
+          +   '<div class="ledger-entry-amount ' + cls + '">' + sign + formatPKR(e.amount) + '</div>'
+          +   '<button class="ledger-entry-delete" type="button" data-entry-id="' + escapeHtml(e.entryId) + '" aria-label="Delete entry" title="Delete entry">'
+          +     '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 4h10M5 4V2.5h4V4M4 4l.5 8h5L10 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+          +   '</button>'
+          + '</div>';
+      }).join('');
+    }
+
+    personLedger.addEventListener('click', async (ev) => {
+      const btn = ev.target.closest('.ledger-entry-delete');
+      if (!btn) return;
+      const entryId = btn.dataset.entryId;
+      if (!confirm('Delete this entry? This cannot be undone.')) return;
+      try {
+        const r = await apiPost('deleteEntry', { entryId: entryId });
+        if (!r.ok) { showError("Couldn't delete", r.error || 'Unknown error.'); return; }
+        showSuccess('Entry deleted', 'Ledger updated.');
+        const pid = currentPerson && currentPerson.personId;
+        await loadDashboard();
+        if (pid) await openPersonDrawer(pid);
+      } catch (err) { showError('Network error', err.message || 'Try again.'); }
+    });
+
+    function closePersonDrawer() {
+      personDrawer.classList.remove('visible');
+      backdrop.classList.remove('visible');
+      currentPerson = null;
+    }
+    backdrop.addEventListener('click', () => {
+      // Close the top-most layer first (person modal can sit on top of
+      // entry modal can sit on top of person drawer).
+      if (personModal.classList.contains('visible')) closePersonModal();
+      else if (addEntryModal.classList.contains('visible')) closeEntryModal();
+      else if (personDrawer.classList.contains('visible')) closePersonDrawer();
+    });
+
+    personAddChargeBtn.addEventListener('click', () => {
+      if (!currentPerson) return;
+      openEntryModal({ type: 'charge', personId: currentPerson.personId, lockPerson: true });
+    });
+    personAddRepayBtn.addEventListener('click', () => {
+      if (!currentPerson) return;
+      openEntryModal({ type: 'repayment', personId: currentPerson.personId, lockPerson: true });
+    });
+    personEditBtn.addEventListener('click', () => {
+      if (!currentPerson) return;
+      openPersonModal({ mode: 'edit', person: currentPerson });
+    });
+    personArchiveBtn.addEventListener('click', async () => {
+      if (!currentPerson) return;
+      const willArchive = !currentPerson.archived;
+      const verb = willArchive ? 'Archive' : 'Unarchive';
+      if (willArchive && !confirm('Archive ' + currentPerson.name + '? They will move to the archived section. You can unarchive later.')) return;
+      try {
+        const r = await apiPost('archivePerson', { personId: currentPerson.personId, archived: willArchive });
+        if (!r.ok) { showError("Couldn't " + verb.toLowerCase(), r.error || 'Unknown error.'); return; }
+        showSuccess(verb + 'd', currentPerson.name + ' has been ' + verb.toLowerCase() + 'd.');
+        closePersonDrawer();
+        await loadDashboard();
+      } catch (err) { showError('Network error', err.message || 'Try again.'); }
+    });
+
+    personWhatsappBtn.addEventListener('click', () => {
+      if (!currentPerson || !currentPerson.phone) return;
+      const balance = Number(currentPerson.balance) || 0;
+      const last = currentPerson.lastRepayment || currentPerson.firstCharge || '';
+      const lines = [
+        'Salaam ' + (currentPerson.name || '') + ',',
+        '',
+        balance > 0
+          ? ('Just a quick reminder — your current balance is ' + formatPKR(balance) + '.')
+          : ('Just a quick note — your balance is settled (' + formatPKR(balance) + ').'),
+        last ? ('Last activity: ' + last + '.') : '',
+        '',
+        '— Danish'
+      ].filter(Boolean);
+      const text = encodeURIComponent(lines.join('\n'));
+      const url = 'https://wa.me/' + currentPerson.phone + '?text=' + text;
+      window.open(url, '_blank');
+    });
+
+    // ============================================================
+    // ADD ENTRY MODAL
+    // ============================================================
+    const addEntryModal = document.getElementById('addEntryModal');
+    const addEntryCancel = document.getElementById('addEntryCancel');
+    const addEntrySave = document.getElementById('addEntrySave');
+    const entryPersonSelect = document.getElementById('entryPerson');
+    const entryAmount = document.getElementById('entryAmount');
+    const entryDate = document.getElementById('entryDate');
+    const entryDescription = document.getElementById('entryDescription');
+    const personPickerField = document.getElementById('personPickerField');
+    const newPersonBtn = document.getElementById('newPersonBtn');
+    const fabBtn = document.getElementById('fabBtn');
+    const addEntryTitle = document.getElementById('addEntryTitle');
+
+    fabBtn.addEventListener('click', () => openEntryModal({}));
+
+    function openEntryModal(opts) {
+      // Reset form
+      document.getElementById('entryTypeCharge').checked = opts.type !== 'repayment';
+      document.getElementById('entryTypeRepay').checked  = opts.type === 'repayment';
+      entryAmount.value = '';
+      entryDate.value = todayIso;
+      entryDescription.value = '';
+
+      if (opts.lockPerson && opts.personId) {
+        entryPersonSelect.value = opts.personId;
+        personPickerField.style.display = 'none';
+        addEntryTitle.textContent = (opts.type === 'repayment' ? 'Log a repayment' : 'Log a charge');
+      } else {
+        entryPersonSelect.value = opts.personId || '';
+        personPickerField.style.display = '';
+        addEntryTitle.textContent = 'Log a transaction';
+      }
+
+      backdrop.classList.add('visible');
+      addEntryModal.classList.add('visible');
+      setTimeout(() => entryAmount.focus(), 80);
+    }
+
+    function closeEntryModal() {
+      addEntryModal.classList.remove('visible');
+      // If the person drawer was open behind, keep its backdrop. Otherwise hide.
+      if (!personDrawer.classList.contains('visible')) backdrop.classList.remove('visible');
+    }
+
+    addEntryCancel.addEventListener('click', closeEntryModal);
+
+    // Stop the form's implicit submit (Enter inside any input) from
+    // reloading the page; route it through the save button instead.
+    document.getElementById('addEntryForm').addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      addEntrySave.click();
+    });
+
+    addEntrySave.addEventListener('click', async () => {
+      const type = document.querySelector('input[name="entryType"]:checked').value;
+      const personId = entryPersonSelect.value;
+      const amount = entryAmount.value;
+      const date = entryDate.value;
+      const description = entryDescription.value.trim();
+      if (!personId) { showError('Pick a person', 'Choose a person or create one first.'); return; }
+      if (!amount || parseFloat(amount) <= 0) { showError('Amount required', 'Enter a positive amount.'); return; }
+      if (!date) { showError('Date required', 'Pick a date for this entry.'); return; }
+      if (!navigator.onLine) { showError('Offline', 'Connect to a network and try again.'); return; }
+
+      addEntrySave.disabled = true;
+      const origText = addEntrySave.textContent;
+      addEntrySave.innerHTML = '<span class="spinner"></span> Saving';
+      try {
+        const r = await apiPost('addEntry', { personId, type, amount, date, description });
+        if (!r.ok) { showError("Couldn't save", r.error || 'Unknown error.'); return; }
+        showSuccess(type === 'charge' ? 'Charge added' : 'Repayment added', formatPKR(parseFloat(amount)));
+        closeEntryModal();
+        const reopenPid = currentPerson && currentPerson.personId === personId ? personId : null;
+        await loadDashboard();
+        if (reopenPid) await openPersonDrawer(reopenPid);
+      } catch (err) {
+        showError('Network error', err.message || 'Try again.');
+      } finally {
+        addEntrySave.disabled = false;
+        addEntrySave.textContent = origText;
+      }
+    });
+
+    function populatePersonPicker(people) {
+      const active = people.filter((p) => !p.archived);
+      const prev = entryPersonSelect.value;
+      entryPersonSelect.innerHTML = '<option value="" disabled selected>Pick a person</option>'
+        + active.map((p) => '<option value="' + escapeHtml(p.personId) + '">' + escapeHtml(p.name) + '</option>').join('');
+      if (prev && active.find((p) => p.personId === prev)) entryPersonSelect.value = prev;
+    }
+
+    newPersonBtn.addEventListener('click', () => {
+      openPersonModal({ mode: 'create' });
+    });
+
+    // ============================================================
+    // PERSON MODAL — add / edit
+    // ============================================================
+    const personModal = document.getElementById('personModal');
+    const personFormCancel = document.getElementById('personFormCancel');
+    const personFormSave = document.getElementById('personFormSave');
+    const personFormId = document.getElementById('personFormId');
+    const personFormName = document.getElementById('personFormName');
+    const personFormPhone = document.getElementById('personFormPhone');
+    const personFormNotes = document.getElementById('personFormNotes');
+    const personModalEyebrow = document.getElementById('personModalEyebrow');
+    const personModalTitle = document.getElementById('personModalTitle');
+
+    function openPersonModal(opts) {
+      const mode = opts.mode || 'create';
+      personFormId.value = mode === 'edit' ? opts.person.personId : '';
+      personFormName.value = mode === 'edit' ? (opts.person.name || '') : '';
+      personFormPhone.value = mode === 'edit' ? (opts.person.phone || '') : '';
+      personFormNotes.value = mode === 'edit' ? (opts.person.notes || '') : '';
+      personModalEyebrow.textContent = mode === 'edit' ? 'Edit person' : 'New person';
+      personModalTitle.textContent = mode === 'edit' ? 'Update details' : 'Add a person';
+      backdrop.classList.add('visible');
+      personModal.classList.add('visible');
+      setTimeout(() => personFormName.focus(), 80);
+    }
+
+    function closePersonModal() {
+      personModal.classList.remove('visible');
+      // Restore the modal/drawer underneath, if any.
+      if (!personDrawer.classList.contains('visible') &&
+          !addEntryModal.classList.contains('visible')) {
+        backdrop.classList.remove('visible');
+      }
+    }
+
+    personFormCancel.addEventListener('click', closePersonModal);
+
+    document.getElementById('personForm').addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      personFormSave.click();
+    });
+
+    personFormSave.addEventListener('click', async () => {
+      const personId = personFormId.value;
+      const name = personFormName.value.trim();
+      const phone = personFormPhone.value.replace(/[^\d]/g, '');
+      const notes = personFormNotes.value.trim();
+      if (!name) { showError('Name required', 'Type the person\'s name.'); return; }
+      if (!navigator.onLine) { showError('Offline', 'Connect to a network and try again.'); return; }
+
+      personFormSave.disabled = true;
+      const origText = personFormSave.textContent;
+      personFormSave.innerHTML = '<span class="spinner"></span> Saving';
+      try {
+        let r;
+        if (personId) {
+          r = await apiPost('updatePerson', { personId, name, phone, notes });
+        } else {
+          r = await apiPost('addPerson', { name, phone, notes });
+        }
+        if (!r.ok) { showError("Couldn't save", r.error || 'Unknown error.'); return; }
+        showSuccess(personId ? 'Person updated' : 'Person added', name);
+        closePersonModal();
+        await loadDashboard();
+        // If we just created a new person from inside the entry modal,
+        // pre-select them so the user can finish their entry without
+        // hunting through the dropdown.
+        if (!personId && r.personId && addEntryModal.classList.contains('visible')) {
+          entryPersonSelect.value = r.personId;
+        }
+        // If we edited the open person, refresh their drawer too.
+        if (personId && currentPerson && currentPerson.personId === personId) {
+          await openPersonDrawer(personId);
+        }
+      } catch (err) {
+        showError('Network error', err.message || 'Try again.');
+      } finally {
+        personFormSave.disabled = false;
+        personFormSave.textContent = origText;
+      }
+    });
+
+    // ============================================================
+    // ONLINE/OFFLINE
+    // ============================================================
+    const offlineBar = document.getElementById('offlineBar');
+    function updateOnlineStatus() {
+      offlineBar.classList.toggle('visible', !navigator.onLine);
+    }
+    window.addEventListener('online', updateOnlineStatus);
+    window.addEventListener('offline', updateOnlineStatus);
+    updateOnlineStatus();
+
+    // ============================================================
+    // SW REGISTRATION
+    // ============================================================
+    if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch((err) => console.warn('SW registration failed:', err));
+      });
+    }
+
+    // ============================================================
+    // HELPERS
+    // ============================================================
+    function formatPKR(n) {
+      const v = Math.round(Number(n) || 0);
+      return '₨' + v.toLocaleString('en-US');
+    }
+    function escapeHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+    }
+    function initialsFor(name) {
+      const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+      if (!parts.length) return '?';
+      if (parts.length === 1) return parts[0][0].toUpperCase();
+      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    }
+    function relativeDays(d) {
+      if (typeof d !== 'number') return '';
+      if (d <= 0) return 'today';
+      if (d === 1) return 'yesterday';
+      return d + ' days ago';
+    }
+    function bucketFor(d) {
+      if (typeof d !== 'number') return '';
+      if (d <= 7)  return 'fresh';
+      if (d <= 30) return 'week';
+      if (d <= 60) return 'month';
+      if (d <= 90) return 'twoMonth';
+      return 'old';
+    }
+  </script>
+
+</body>
+</html>
