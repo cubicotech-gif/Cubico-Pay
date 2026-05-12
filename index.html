@@ -1781,6 +1781,14 @@
           <input type="date" id="paymentDate" name="paymentDate" class="input" required />
         </div>
 
+        <div class="field client-only">
+          <div class="field-label">
+            <label for="vendorName">Vendor name</label>
+            <span class="hint">Optional</span>
+          </div>
+          <input type="text" id="vendorName" name="vendorName" class="input" placeholder="Leave blank to log under your own name" autocomplete="off" />
+        </div>
+
         <div class="field admin-only">
           <div class="field-label">
             <label for="adminLogForClient">Logging on behalf of</label>
@@ -2098,7 +2106,7 @@
          FOOTER (shared)
          ============================================================ -->
     <footer class="footer">
-      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v17</p>
+      <p class="footer-text">Cubico Technologies · <em>internal tool</em> · v18</p>
     </footer>
 
   </div>
@@ -2656,9 +2664,12 @@
         return;
       }
 
-      // For client role, clientName is filled server-side from the session.
-      // For admin role, both clientId (the account this payment belongs to)
-      // and clientName (the sender as shown on the receipt) are needed.
+      // - client role: clientId comes from the session server-side.
+      //                clientName is optional: if they typed a vendor
+      //                name, send it so the sheet's Sender column shows
+      //                the vendor; if blank, the backend defaults to
+      //                their username (preserving the original behaviour).
+      // - admin role:  clientId picker + sender name are both required.
       const payload = {
         paymentDate: document.getElementById('paymentDate').value,
         usdAmount:   document.getElementById('usdAmount').value,
@@ -2678,9 +2689,12 @@
         }
         payload.clientId   = picker.value;
         payload.clientName = cname;
+      } else {
+        const vendor = document.getElementById('vendorName').value.trim();
+        if (vendor) payload.clientName = vendor;
       }
 
-      window.lastSubmission = Object.assign({ clientName: session.username }, payload);
+      window.lastSubmission = Object.assign({ clientName: payload.clientName || session.username }, payload);
       setLoading(true);
 
       try {
@@ -2735,6 +2749,11 @@
 
       form.reset();
       document.getElementById('paymentDate').value = `${yyyy}-${mm}-${dd}`;
+      // form.reset() also clears the optional Vendor field — make that
+      // explicit so it doesn't accidentally retain a value if a future
+      // change adds a default.
+      const vendorEl = document.getElementById('vendorName');
+      if (vendorEl) vendorEl.value = '';
       // form.reset() restores the default-checked Pending radio; sync the
       // pill UI so its `active` class matches.
       pills.forEach((p) => {
@@ -3169,6 +3188,7 @@
         cell_('Paid status',       e.paidStatus || 'Unpaid'),
         cell_('Paid on',           e.paidDate ? formatDate(e.paidDate) : '', 'mono'),
         cell_('Batch ref',         e.batchRef || '', 'mono', /* full */ true),
+        cell_('Logged by',         e.loggedBy || '', 'mono'),
       ];
       const adminEdit =
         '<div class="detail-cell full admin-only" style="margin-top:6px;">'

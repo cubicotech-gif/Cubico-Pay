@@ -47,7 +47,7 @@ const COL = {
   paymentDate: 1,  clientName: 2,  usdAmount: 3,  account: 4,  receipt: 5,
   pkrAmount:   6,  feePct:     7,  finalPKR:   8,  paidStatus: 9, daysSince: 10,
   batchRef:   11,  roe:       12,  entryDate: 13,
-  actualUsd:  14,  actualSender: 15, paidDate: 16, clientId: 17
+  actualUsd:  14,  actualSender: 15, paidDate: 16, clientId: 17, loggedBy: 18
 };
 
 // ============================================
@@ -472,16 +472,18 @@ function handleLogPayment_(data, session) {
   }
 
   // Client name + clientId resolution:
-  //   - client role: clientId comes from the session; clientName falls
-  //                  back to the username if the form didn't supply one
+  //   - client role: clientId comes from the session. clientName is the
+  //                  *vendor name* if they typed one (client logging on
+  //                  behalf of a vendor); otherwise we fall back to the
+  //                  logged-in user's username so existing "log my own
+  //                  payment" flow still produces a sensible row.
   //   - admin role:  must pass clientId in the payload (logging on behalf
-  //                  of a specific client) and a client name
+  //                  of a specific client) and a sender/client name.
   let clientName, clientId;
   if (session.role === 'client') {
     clientId   = session.clientId;
-    clientName = data.clientName
-      ? String(data.clientName).trim()
-      : session.username;
+    const typedVendor = data.clientName ? String(data.clientName).trim() : '';
+    clientName = typedVendor || session.username;
   } else {
     clientId = String(data.clientId || '').trim();
     if (!clientId) return jsonResponse({ ok: false, error: 'clientId required when admin logs a payment' });
@@ -492,6 +494,11 @@ function handleLogPayment_(data, session) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) return jsonResponse({ ok: false, error: 'Tab "' + SHEET_NAME + '" not found in spreadsheet' });
+
+  // Make sure the sheet has column R (loggedBy) with its header before
+  // we try to write to it. Existing sheets created before this change
+  // may only go up to column Q.
+  ensureLoggedByColumn_(sheet);
 
   sheet.insertRowBefore(2);
   const targetRow = 2;
@@ -511,6 +518,7 @@ function handleLogPayment_(data, session) {
   ]]);
   sheet.getRange(targetRow, COL.entryDate).setValue(new Date());
   sheet.getRange(targetRow, COL.clientId).setValue(clientId);
+  sheet.getRange(targetRow, COL.loggedBy).setValue(session.username);
 
   sheet.getRange(targetRow, COL.paymentDate).setNumberFormat('yyyy-mm-dd');
   sheet.getRange(targetRow, COL.usdAmount).setNumberFormat('$#,##0.00');
@@ -660,6 +668,20 @@ function getPaymentsSheetOrThrow_() {
   return sheet;
 }
 
+/**
+ * Make sure column R (loggedBy) physically exists and has its header.
+ * Existing deployments may have a sheet that only goes up to column Q,
+ * so writes to column 18 would otherwise silently fail or get clipped.
+ * Idempotent — safe to call before every write.
+ */
+function ensureLoggedByColumn_(sheet) {
+  if (sheet.getMaxColumns() < COL.loggedBy) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), COL.loggedBy - sheet.getMaxColumns());
+  }
+  const header = sheet.getRange(1, COL.loggedBy);
+  if (!header.getValue()) header.setValue('loggedBy');
+}
+
 function validateRow_(sheet, rowInput) {
   const n = parseInt(rowInput, 10);
   if (!n || n < 2) return { error: 'Invalid row' };
@@ -680,7 +702,7 @@ function readFilledRows_() {
   if (maxRows < 2) return [];
 
   const maxCols = sheet.getMaxColumns();
-  const readCols = Math.max(13, Math.min(17, maxCols));
+  const readCols = Math.max(13, Math.min(18, maxCols));
 
   const values = sheet.getRange(2, 1, maxRows - 1, readCols).getValues();
   const rows = [];
@@ -706,7 +728,8 @@ function readFilledRows_() {
       actualUsdAmount:  readCols >= 14 ? r[13] : '',
       actualSenderName: readCols >= 15 ? r[14] : '',
       paidDate:         readCols >= 16 ? r[15] : '',
-      clientId:         readCols >= 17 ? String(r[16] || '') : ''
+      clientId:         readCols >= 17 ? String(r[16] || '') : '',
+      loggedBy:         readCols >= 18 ? String(r[17] || '') : ''
     });
   }
   return rows;
@@ -909,7 +932,8 @@ function serializeEntry_(r) {
     daysSince: isNumeric_(r.daysSince) ? r.daysSince : '',
     batchRef: r.batchRef || '',
     roe: isNumeric_(r.roe) ? r.roe : '',
-    clientId: r.clientId || ''
+    clientId: r.clientId || '',
+    loggedBy: r.loggedBy || ''
   };
 }
 
