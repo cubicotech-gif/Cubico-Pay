@@ -334,7 +334,7 @@ function listUsers_() {
     clientId: String(r[4] || ''),
     active: toBool_(r[5]),
     createdAt: r[6] instanceof Date
-      ? Utilities.formatDate(r[6], Session.getScriptTimeZone(), 'yyyy-MM-dd')
+      ? Utilities.formatDate(r[6], SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone(), 'yyyy-MM-dd')
       : String(r[6] || '')
   })).filter((u) => u.username);
 }
@@ -457,12 +457,19 @@ function handleLogPayment_(data, session) {
   if (dateParts.length !== 3) {
     return jsonResponse({ ok: false, error: 'Invalid date format. Expected YYYY-MM-DD.' });
   }
-  const paymentDate = new Date(
-    parseInt(dateParts[0], 10),
-    parseInt(dateParts[1], 10) - 1,
-    parseInt(dateParts[2], 10)
-  );
-  if (isNaN(paymentDate.getTime())) {
+  // Parse the date in the SPREADSHEET's timezone, not the script's. If the
+  // two differ (Apps Script projects often default to US Pacific while
+  // sheets are set to the user's local zone), `new Date(y, m, d)` would
+  // anchor midnight in the script TZ and the cell would render the wrong
+  // day after conversion to sheet TZ. parseDate avoids that drift.
+  const sheetTz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+  let paymentDate;
+  try {
+    paymentDate = Utilities.parseDate(data.paymentDate, sheetTz, 'yyyy-MM-dd');
+  } catch (e) {
+    return jsonResponse({ ok: false, error: 'Invalid payment date' });
+  }
+  if (!paymentDate || isNaN(paymentDate.getTime())) {
     return jsonResponse({ ok: false, error: 'Invalid payment date' });
   }
 
@@ -520,9 +527,9 @@ function handleLogPayment_(data, session) {
   sheet.getRange(targetRow, COL.clientId).setValue(clientId);
   sheet.getRange(targetRow, COL.loggedBy).setValue(session.username);
 
-  sheet.getRange(targetRow, COL.paymentDate).setNumberFormat('yyyy-mm-dd');
-  sheet.getRange(targetRow, COL.usdAmount).setNumberFormat('$#,##0.00');
-  sheet.getRange(targetRow, COL.entryDate).setNumberFormat('yyyy-mm-dd');
+  // Apply the full standard formatting in one pass — supersedes the
+  // per-cell setNumberFormat calls that used to live here.
+  applyDataRangeFormatting_(sheet, targetRow, 1);
 
   bustDashboardCache_({ clientId: clientId });
 
@@ -553,6 +560,7 @@ function handleConfirmEntry_(data) {
     sheet.getRange(row.n, COL.actualSender).setValue(String(data.actualSenderName || '').trim());
   }
 
+  applyDataRangeFormatting_(sheet, row.n, 1);
   bustDashboardCache_({ clientId: getRowClientId_(sheet, row.n) });
   return jsonResponse({ ok: true });
 }
@@ -574,12 +582,13 @@ function handleMarkPaid_(data) {
   const paidCell = sheet.getRange(row.n, COL.paidDate);
   if (status === 'Paid') {
     if (!(paidCell.getValue() instanceof Date)) {
-      paidCell.setValue(new Date()).setNumberFormat('yyyy-mm-dd');
+      paidCell.setValue(new Date());
     }
   } else {
     paidCell.clearContent();
   }
 
+  applyDataRangeFormatting_(sheet, row.n, 1);
   bustDashboardCache_({ clientId: getRowClientId_(sheet, row.n) });
   return jsonResponse({ ok: true });
 }
@@ -600,6 +609,7 @@ function handleSetFinancials_(data) {
     sheet.getRange(row.n, COL.roe).setValue(v);
   }
 
+  applyDataRangeFormatting_(sheet, row.n, 1);
   bustDashboardCache_({ clientId: getRowClientId_(sheet, row.n) });
   return jsonResponse({ ok: true });
 }
@@ -651,13 +661,14 @@ function handleEditEntry_(data) {
     const paidCell = sheet.getRange(row.n, COL.paidDate);
     if (status === 'Paid') {
       if (!(paidCell.getValue() instanceof Date)) {
-        paidCell.setValue(new Date()).setNumberFormat('yyyy-mm-dd');
+        paidCell.setValue(new Date());
       }
     } else {
       paidCell.clearContent();
     }
   }
 
+  applyDataRangeFormatting_(sheet, row.n, 1);
   bustDashboardCache_({ clientId: getRowClientId_(sheet, row.n) });
   return jsonResponse({ ok: true });
 }
@@ -679,7 +690,16 @@ function ensureLoggedByColumn_(sheet) {
     sheet.insertColumnsAfter(sheet.getMaxColumns(), COL.loggedBy - sheet.getMaxColumns());
   }
   const header = sheet.getRange(1, COL.loggedBy);
-  if (!header.getValue()) header.setValue('loggedBy');
+  if (!header.getValue()) {
+    header.setValue('loggedBy')
+          .setBackground(SHEET_FORMAT.headerBg)
+          .setFontColor(SHEET_FORMAT.headerText)
+          .setFontWeight('bold')
+          .setFontFamily(SHEET_FORMAT.font)
+          .setFontSize(SHEET_FORMAT.headerSize)
+          .setVerticalAlignment('middle')
+          .setHorizontalAlignment('left');
+  }
 }
 
 function validateRow_(sheet, rowInput) {
@@ -757,7 +777,7 @@ function buildDashboard_(session) {
     rows = rows.filter((r) => r.clientId === session.clientId);
   }
 
-  const tz = Session.getScriptTimeZone();
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
   const thisMonth = Utilities.formatDate(new Date(), tz, 'yyyy-MM');
 
   let totalUnpaidPKR = 0;
@@ -846,7 +866,7 @@ function buildDashboard_(session) {
 }
 
 function buildPayouts_(rows) {
-  const tz = Session.getScriptTimeZone();
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
   const buckets = {};
 
   for (const r of rows) {
@@ -910,7 +930,7 @@ function buildPayouts_(rows) {
 }
 
 function serializeEntry_(r) {
-  const tz = Session.getScriptTimeZone();
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
   return {
     row: r.row,
     paymentDate: r.paymentDate instanceof Date
@@ -972,6 +992,117 @@ function jsonResponse(obj) {
 }
 
 // ============================================
+// SHEET FORMATTING — keeps the sheet looking consistent
+// ============================================
+//
+// Change any value in SHEET_FORMAT (or the column widths below) to
+// tweak the look. Re-run applyStandardFormatting() from the editor to
+// push the change across all existing rows. Every backend write (new
+// payment, admin edit) and every user edit (via onEdit) auto-reapplies
+// the standard to the affected row(s), so manual font / color / size
+// changes get auto-corrected.
+
+const SHEET_FORMAT = {
+  headerBg:   '#060C18',
+  headerText: '#FFFFFF',
+  bodyBg:     '#FFFFFF',
+  bodyText:   '#0A1628',
+  font:       'Inter',
+  headerSize: 11,
+  bodySize:   10
+};
+
+const COL_WIDTHS = {
+  paymentDate: 110, clientName: 180, usdAmount: 110, account: 130, receipt: 110,
+  pkrAmount:   120, feePct:      90, finalPKR:  130, paidStatus: 100, daysSince: 90,
+  batchRef:    140, roe:         80, entryDate: 150,
+  actualUsd:   120, actualSender: 180, paidDate: 110, clientId: 90, loggedBy: 110
+};
+
+/**
+ * Apply the standard formatting to the entire Payments Log sheet.
+ * Idempotent — safe to re-run anytime. Run this once from the Apps
+ * Script editor to clean up existing inconsistent formatting; after
+ * that, the auto-revert hooks keep things tidy.
+ */
+function applyStandardFormatting() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  if (!sheet) throw new Error('Tab "' + SHEET_NAME + '" not found in spreadsheet');
+  ensureLoggedByColumn_(sheet);
+  applyHeaderFormatting_(sheet);
+  applyColumnWidths_(sheet);
+  if (sheet.getFrozenRows() < 1) sheet.setFrozenRows(1);
+  const last = sheet.getLastRow();
+  if (last >= 2) applyDataRangeFormatting_(sheet, 2, last - 1);
+  Logger.log('Standard formatting applied to ' + Math.max(0, last - 1) + ' data rows.');
+}
+
+function applyHeaderFormatting_(sheet) {
+  const range = sheet.getRange(1, 1, 1, COL.loggedBy);
+  range.setBackground(SHEET_FORMAT.headerBg)
+       .setFontColor(SHEET_FORMAT.headerText)
+       .setFontWeight('bold')
+       .setFontFamily(SHEET_FORMAT.font)
+       .setFontSize(SHEET_FORMAT.headerSize)
+       .setVerticalAlignment('middle')
+       .setHorizontalAlignment('left');
+  try { sheet.setRowHeight(1, 36); } catch (e) { /* non-fatal */ }
+}
+
+/**
+ * Format a block of data rows. Resets font, size, color, alignment, and
+ * per-column number formats. Does NOT change cell values.
+ */
+function applyDataRangeFormatting_(sheet, startRow, numRows) {
+  if (numRows <= 0 || startRow < 2) return;
+  const full = sheet.getRange(startRow, 1, numRows, COL.loggedBy);
+  full.setFontFamily(SHEET_FORMAT.font)
+      .setFontSize(SHEET_FORMAT.bodySize)
+      .setFontColor(SHEET_FORMAT.bodyText)
+      .setBackground(SHEET_FORMAT.bodyBg)
+      .setFontWeight('normal')
+      .setFontStyle('normal')
+      .setVerticalAlignment('middle')
+      .setHorizontalAlignment('left');
+
+  sheet.getRange(startRow, COL.paymentDate, numRows).setNumberFormat('yyyy-mm-dd');
+  sheet.getRange(startRow, COL.usdAmount,   numRows).setNumberFormat('$#,##0.00');
+  sheet.getRange(startRow, COL.pkrAmount,   numRows).setNumberFormat('"₨"#,##0');
+  sheet.getRange(startRow, COL.feePct,      numRows).setNumberFormat('0.00%');
+  sheet.getRange(startRow, COL.finalPKR,    numRows).setNumberFormat('"₨"#,##0');
+  sheet.getRange(startRow, COL.daysSince,   numRows).setNumberFormat('0');
+  sheet.getRange(startRow, COL.roe,         numRows).setNumberFormat('0.00');
+  sheet.getRange(startRow, COL.entryDate,   numRows).setNumberFormat('yyyy-mm-dd hh:mm');
+  sheet.getRange(startRow, COL.actualUsd,   numRows).setNumberFormat('$#,##0.00');
+  sheet.getRange(startRow, COL.paidDate,    numRows).setNumberFormat('yyyy-mm-dd');
+}
+
+function applyColumnWidths_(sheet) {
+  const map = {};
+  map[COL.paymentDate]  = COL_WIDTHS.paymentDate;
+  map[COL.clientName]   = COL_WIDTHS.clientName;
+  map[COL.usdAmount]    = COL_WIDTHS.usdAmount;
+  map[COL.account]      = COL_WIDTHS.account;
+  map[COL.receipt]      = COL_WIDTHS.receipt;
+  map[COL.pkrAmount]    = COL_WIDTHS.pkrAmount;
+  map[COL.feePct]       = COL_WIDTHS.feePct;
+  map[COL.finalPKR]     = COL_WIDTHS.finalPKR;
+  map[COL.paidStatus]   = COL_WIDTHS.paidStatus;
+  map[COL.daysSince]    = COL_WIDTHS.daysSince;
+  map[COL.batchRef]     = COL_WIDTHS.batchRef;
+  map[COL.roe]          = COL_WIDTHS.roe;
+  map[COL.entryDate]    = COL_WIDTHS.entryDate;
+  map[COL.actualUsd]    = COL_WIDTHS.actualUsd;
+  map[COL.actualSender] = COL_WIDTHS.actualSender;
+  map[COL.paidDate]     = COL_WIDTHS.paidDate;
+  map[COL.clientId]     = COL_WIDTHS.clientId;
+  map[COL.loggedBy]     = COL_WIDTHS.loggedBy;
+  Object.keys(map).forEach((col) => {
+    try { sheet.setColumnWidth(parseInt(col, 10), map[col]); } catch (e) { /* non-fatal */ }
+  });
+}
+
+// ============================================
 // SIMPLE TRIGGERS
 // ============================================
 
@@ -979,7 +1110,8 @@ function jsonResponse(obj) {
  * Watches column I (Paid status) of "Payments Log". See original notes:
  * stamps column P with today's date when status flips to Paid, clears it
  * otherwise. Also busts the dashboard cache so admin/clients see fresh
- * data on next open.
+ * data on next open. After all that, re-applies the standard formatting
+ * to the touched rows so manual font / color changes get auto-corrected.
  */
 function onEdit(e) {
   if (!e || !e.range) return;
@@ -988,27 +1120,37 @@ function onEdit(e) {
 
   const startCol = e.range.getColumn();
   const endCol = startCol + e.range.getNumColumns() - 1;
-  if (startCol > COL.paidStatus || endCol < COL.paidStatus) return;
-
   const startRow = e.range.getRow();
   const numRows = e.range.getNumRows();
-  const today = new Date();
 
-  for (let i = 0; i < numRows; i++) {
-    const row = startRow + i;
-    if (row < 2) continue;
-    const status = sheet.getRange(row, COL.paidStatus).getValue();
-    const paidCell = sheet.getRange(row, COL.paidDate);
-    const existing = paidCell.getValue();
-    if (status === 'Paid') {
-      if (!(existing instanceof Date)) {
-        paidCell.setValue(today);
-        paidCell.setNumberFormat('yyyy-mm-dd');
+  // Paid-status side-effect: stamp / clear column P when col I changes.
+  const touchesPaidStatus = startCol <= COL.paidStatus && endCol >= COL.paidStatus;
+  if (touchesPaidStatus) {
+    const today = new Date();
+    for (let i = 0; i < numRows; i++) {
+      const row = startRow + i;
+      if (row < 2) continue;
+      const status = sheet.getRange(row, COL.paidStatus).getValue();
+      const paidCell = sheet.getRange(row, COL.paidDate);
+      const existing = paidCell.getValue();
+      if (status === 'Paid') {
+        if (!(existing instanceof Date)) {
+          paidCell.setValue(today);
+        }
+      } else if (existing) {
+        paidCell.clearContent();
       }
-    } else if (existing) {
-      paidCell.clearContent();
     }
   }
+
+  // Auto-revert: re-apply the standard formatting to whatever rows the
+  // user just touched. Their values stay; only fonts / colors / number
+  // formats snap back to the standard.
+  try {
+    const firstDataRow = Math.max(startRow, 2);
+    const overlap = (startRow + numRows - 1) - firstDataRow + 1;
+    if (overlap > 0) applyDataRangeFormatting_(sheet, firstDataRow, overlap);
+  } catch (err) { /* non-fatal */ }
 
   bustDashboardCache_();
 }
