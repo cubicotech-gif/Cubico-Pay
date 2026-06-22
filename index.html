@@ -1198,6 +1198,83 @@
     }
     .recent-tag.unpaid .recent-tag-dot { background: var(--muted-soft); }
 
+    /* ---- Account differentiator tags (color per payment account) ---- */
+    .acct-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-weight: 600;
+      white-space: nowrap;
+      background: var(--acct-soft, rgba(100,116,139,0.10));
+      color: var(--acct, #64748B);
+    }
+    .acct-tag-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--acct, #64748B);
+      flex-shrink: 0;
+    }
+    /* small swatch shown next to the account <select> in the form */
+    .acct-swatch {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      margin-right: 8px;
+      vertical-align: middle;
+      background: var(--acct, #64748B);
+    }
+
+    /* ---- Filter & sort bar (Activity / lists) ---- */
+    .filter-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .filter-bar .filter-control {
+      position: relative;
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .filter-bar select {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--navy);
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      padding: 8px 26px 8px 10px;
+      cursor: pointer;
+    }
+    .filter-bar .filter-control::after {
+      content: '';
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      width: 7px;
+      height: 7px;
+      border-right: 1.5px solid var(--muted-soft);
+      border-bottom: 1.5px solid var(--muted-soft);
+      transform: translateY(-65%) rotate(45deg);
+      pointer-events: none;
+    }
+    .filter-bar select:focus {
+      outline: none;
+      border-color: var(--coral);
+    }
+    .filter-active-dot {
+      display: none;
+    }
+
     .recent-empty {
       text-align: center;
       padding: 48px 20px;
@@ -1831,13 +1908,13 @@
           <div class="select-wrapper">
             <select id="account" name="account" class="select" required>
               <option value="" disabled selected>Select an account</option>
-              <option value="PayPal">PayPal</option>
-              <option value="Cash App">Cash App</option>
-              <option value="Zelle">Zelle</option>
-              <option value="Cubico PayPal">Cubico PayPal</option>
-              <option value="Wise">Wise</option>
-              <option value="Payoneer">Payoneer</option>
-              <option value="Bank Transfer">Bank Transfer</option>
+              <option value="PayPal"        style="color:#2563EB;font-weight:600">PayPal</option>
+              <option value="Cash App"      style="color:#16A34A;font-weight:600">Cash App</option>
+              <option value="Zelle"         style="color:#7C3AED;font-weight:600">Zelle</option>
+              <option value="Cubico PayPal" style="color:#0D9488;font-weight:600">Cubico PayPal</option>
+              <option value="Wise"          style="color:#0891B2;font-weight:600">Wise</option>
+              <option value="Payoneer"      style="color:#EA580C;font-weight:600">Payoneer</option>
+              <option value="Bank Transfer" style="color:#64748B;font-weight:600">Bank Transfer</option>
             </select>
           </div>
         </div>
@@ -1909,6 +1986,14 @@
         </div>
       </div>
 
+      <div class="recent-section" id="notReceivedSection" style="display:none;">
+        <div class="recent-section-header">
+          <span class="recent-section-title">Not received</span>
+          <span class="recent-section-title" id="notReceivedCount" style="color:var(--coral-deep);font-weight:500;"></span>
+        </div>
+        <div class="recent-list" id="notReceivedList"></div>
+      </div>
+
       <div class="recent-section">
         <div class="recent-section-header">
           <span class="recent-section-title">Awaiting action</span>
@@ -1918,6 +2003,36 @@
             </svg>
             <span>Refresh</span>
           </button>
+        </div>
+        <div class="filter-bar" id="activityFilterBar">
+          <div class="filter-control">
+            <select id="filterAccount" aria-label="Filter by account">
+              <option value="">All accounts</option>
+            </select>
+          </div>
+          <div class="filter-control">
+            <select id="filterReceipt" aria-label="Filter by receipt">
+              <option value="">All receipts</option>
+              <option value="Confirmed">Confirmed</option>
+              <option value="Pending">Pending</option>
+            </select>
+          </div>
+          <div class="filter-control">
+            <select id="filterPaid" aria-label="Filter by paid status">
+              <option value="">Paid &amp; unpaid</option>
+              <option value="Unpaid">Unpaid</option>
+              <option value="Paid">Paid</option>
+            </select>
+          </div>
+          <div class="filter-control">
+            <select id="sortBy" aria-label="Sort">
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="amount-desc">Amount: high → low</option>
+              <option value="amount-asc">Amount: low → high</option>
+              <option value="days-desc">Days waiting: most</option>
+            </select>
+          </div>
         </div>
         <div class="recent-list" id="recentList">
           <div class="recent-row">
@@ -3040,7 +3155,7 @@
         if (!j.ok) throw new Error(j.error || 'Dashboard error');
         dashboardCache.data = j;
         renderSummary(j.summary);
-        renderRecent(j.alerts || []);
+        renderActivity(j.alerts || []);
         renderStatements(j.months || []);
         renderPayouts(j.payouts || []);
       } catch (err) {
@@ -3147,7 +3262,7 @@
       const paidTag    = paidPill(e.paidStatus);
 
       const metaParts = [];
-      if (e.account) metaParts.push(`<span class="recent-meta-text">${escapeHtml(e.account)}</span>`);
+      if (e.account) metaParts.push(accountTagHtml(e.account));
       if (dayText)   metaParts.push(`<span class="recent-days ${dayClass}">${escapeHtml(dayText)}</span>`);
       const meta = metaParts.join('<span class="recent-meta-sep">·</span>');
 
@@ -3400,6 +3515,138 @@
         ? items.map(recentRowHtml).join('')
         : '<div class="recent-empty">No entries.</div>';
     }
+
+    // ---------- Account color differentiators ----------
+    const ACCOUNT_COLORS = {
+      'PayPal':        '#2563EB',
+      'Cubico PayPal': '#0D9488',
+      'Cash App':      '#16A34A',
+      'Zelle':         '#7C3AED',
+      'Wise':          '#0891B2',
+      'Payoneer':      '#EA580C',
+      'Bank Transfer': '#64748B'
+    };
+    function accountColor(account) {
+      return ACCOUNT_COLORS[account] || '#64748B';
+    }
+    function hexToSoft(hex, a) {
+      const n = parseInt(hex.slice(1), 16);
+      const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+      return `rgba(${r},${g},${b},${a})`;
+    }
+    function accountTagHtml(account) {
+      if (!account) return '';
+      const c = accountColor(account);
+      const style = `--acct:${c};--acct-soft:${hexToSoft(c, 0.10)}`;
+      return `<span class="acct-tag" style="${style}"><span class="acct-tag-dot"></span>${escapeHtml(account)}</span>`;
+    }
+
+    // ---------- Activity: Not Received box + filter / sort ----------
+    let activityAlerts = [];
+    const activityFilters = { account: '', receipt: '', paid: '', sort: 'newest' };
+
+    function renderActivity(alerts) {
+      activityAlerts = Array.isArray(alerts) ? alerts.slice() : [];
+      populateAccountFilter(activityAlerts);
+      renderNotReceived(activityAlerts);
+      applyActivityFilters();
+    }
+
+    function renderNotReceived(alerts) {
+      const section = document.getElementById('notReceivedSection');
+      const list    = document.getElementById('notReceivedList');
+      const countEl = document.getElementById('notReceivedCount');
+      if (!section || !list) return;
+      const items = alerts
+        .filter((e) => e.receipt === 'Not Received')
+        .sort((a, b) => (typeof b.daysSince === 'number' ? b.daysSince : 0)
+                      - (typeof a.daysSince === 'number' ? a.daysSince : 0));
+      if (!items.length) {
+        section.style.display = 'none';
+        list.innerHTML = '';
+        return;
+      }
+      section.style.display = '';
+      const stale = items.filter((e) => typeof e.daysSince === 'number' && e.daysSince > 5).length;
+      if (countEl) countEl.textContent = stale > 0 ? (stale + ' over 5 days') : (items.length + ' total');
+      list.innerHTML = items.map(recentRowHtml).join('');
+    }
+
+    function populateAccountFilter(alerts) {
+      const sel = document.getElementById('filterAccount');
+      if (!sel) return;
+      const present = Array.from(new Set(alerts.map((e) => e.account).filter(Boolean)));
+      const current = sel.value;
+      sel.innerHTML = '<option value="">All accounts</option>'
+        + present.map((a) => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join('');
+      if (present.indexOf(current) !== -1) sel.value = current;
+    }
+
+    function applyActivityFilters() {
+      // Not Received entries live in their own box, so keep them out here.
+      let items = activityAlerts.filter((e) => e.receipt !== 'Not Received');
+      if (activityFilters.account) items = items.filter((e) => e.account === activityFilters.account);
+      if (activityFilters.receipt) items = items.filter((e) => e.receipt === activityFilters.receipt);
+      if (activityFilters.paid)    items = items.filter((e) => (e.paidStatus || 'Unpaid') === activityFilters.paid);
+      items = sortActivity(items, activityFilters.sort);
+      const filtered = activityFilters.account || activityFilters.receipt || activityFilters.paid;
+      if (!items.length && filtered) {
+        recentList.innerHTML =
+          '<div class="recent-empty"><em>No matching entries.</em><br>Try clearing a filter.</div>';
+        return;
+      }
+      renderRecent(items);
+    }
+
+    function sortActivity(items, mode) {
+      const arr = items.slice();
+      const amt = (e) => (typeof e.actualUsdAmount === 'number') ? e.actualUsdAmount
+                       : (typeof e.usdAmount === 'number') ? e.usdAmount : 0;
+      const day = (e) => (typeof e.daysSince === 'number') ? e.daysSince : -Infinity;
+      const dt  = (e) => e.paymentDate || '';
+      switch (mode) {
+        case 'oldest':      arr.sort((a, b) => dt(a) < dt(b) ? -1 : dt(a) > dt(b) ? 1 : 0); break;
+        case 'amount-desc': arr.sort((a, b) => amt(b) - amt(a)); break;
+        case 'amount-asc':  arr.sort((a, b) => amt(a) - amt(b)); break;
+        case 'days-desc':   arr.sort((a, b) => day(b) - day(a)); break;
+        default:            arr.sort((a, b) => dt(a) < dt(b) ? 1 : dt(a) > dt(b) ? -1 : 0); break;
+      }
+      return arr;
+    }
+
+    (function wireActivityControls() {
+      const map = {
+        filterAccount: 'account',
+        filterReceipt: 'receipt',
+        filterPaid:    'paid',
+        sortBy:        'sort'
+      };
+      Object.keys(map).forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('change', () => {
+          activityFilters[map[id]] = el.value;
+          applyActivityFilters();
+        });
+      });
+    })();
+
+    // Tint the account <select> to match the chosen account.
+    (function wireAccountTint() {
+      const sel = document.getElementById('account');
+      if (!sel) return;
+      const apply = () => {
+        if (sel.value) {
+          sel.style.color = accountColor(sel.value);
+          sel.style.fontWeight = '600';
+        } else {
+          sel.style.color = '';
+          sel.style.fontWeight = '';
+        }
+      };
+      sel.addEventListener('change', apply);
+      apply();
+    })();
 
     function receiptPill(receipt) {
       if (receipt === 'Confirmed')    return '<span class="recent-tag confirmed"><span class="recent-tag-dot"></span>Confirmed</span>';
