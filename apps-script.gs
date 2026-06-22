@@ -824,7 +824,14 @@ function buildDashboard_(session) {
   for (const r of rows) {
     const roeSet   = isNumeric_(r.roe) && r.roe > 0;
     const isPaid   = r.paidStatus === 'Paid';
-    const isUnpaid = r.paidStatus === 'Unpaid';
+    // A row counts as unpaid unless it's explicitly marked Paid. Blank
+    // status is the default lifecycle state (still owed) — this matches
+    // both the row's "Unpaid" badge in the UI and the Statements tab's
+    // outstanding-PKR logic, which already use !isPaid.
+    const isUnpaid = !isPaid;
+    // USD currency check — amounts are recorded only (no conversion), so
+    // non-USD entries must NOT be summed into a USD total.
+    const isUSD    = !r.currency || String(r.currency).toUpperCase() === 'USD';
     const usdForBucket = isNumeric_(r.actualUsdAmount) ? r.actualUsdAmount : r.usdAmount;
 
     if (isUnpaid && roeSet && isNumeric_(r.finalPKR)) totalUnpaidPKR += r.finalPKR;
@@ -833,7 +840,10 @@ function buildDashboard_(session) {
 
     if (r.paymentDate instanceof Date) {
       const ym = Utilities.formatDate(r.paymentDate, tz, 'yyyy-MM');
-      if (ym === thisMonth && isNumeric_(usdForBucket)) {
+      // "This month USD" = money actually received this month: only
+      // Confirmed receipts, only USD entries (no Pending/Not Received
+      // claims, no foreign currencies polluting the figure).
+      if (ym === thisMonth && r.receipt === 'Confirmed' && isUSD && isNumeric_(usdForBucket)) {
         totalReceivedUSDThisMonth += usdForBucket;
       }
 
