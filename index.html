@@ -1397,6 +1397,24 @@
       -webkit-tap-highlight-color: transparent;
     }
     .tab svg { display: block; }
+    .tab-badge {
+      position: absolute;
+      top: 6px;
+      right: 50%;
+      transform: translateX(18px);
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      border-radius: 999px;
+      background: var(--coral);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 16px;
+      text-align: center;
+      letter-spacing: 0;
+    }
+    .tab-badge[hidden] { display: none; }
     .tab[aria-selected="true"] { color: var(--navy); }
     .tab[aria-selected="true"]::after {
       content: '';
@@ -2065,14 +2083,6 @@
         </div>
       </div>
 
-      <div class="recent-section" id="notReceivedSection" style="display:none;">
-        <div class="recent-section-header">
-          <span class="recent-section-title">Not received</span>
-          <span class="recent-section-title" id="notReceivedCount" style="color:var(--coral-deep);font-weight:500;"></span>
-        </div>
-        <div class="recent-list" id="notReceivedList"></div>
-      </div>
-
       <div class="recent-section">
         <div class="recent-section-header">
           <span class="recent-section-title">Awaiting action</span>
@@ -2136,6 +2146,32 @@
             <div class="recent-meta"><span class="skeleton">Account · date · status</span></div>
           </div>
         </div>
+      </div>
+
+    </section>
+
+    <!-- ============================================================
+         NOT RECEIVED VIEW — its own tab, off the Activity list
+         ============================================================ -->
+    <section class="view" id="notReceivedView" role="tabpanel" aria-labelledby="tabNotReceived">
+
+      <div class="title-block">
+        <div class="eyebrow">Not received</div>
+        <h1>Still <em>not received</em></h1>
+        <p class="subtitle">Payments marked "Not Received". Anything past 5 days is flagged so you can chase it.</p>
+      </div>
+
+      <div class="recent-section">
+        <div class="recent-section-header">
+          <span class="recent-section-title">Not received <span id="notReceivedCount" style="color:var(--coral-deep);font-weight:500;"></span></span>
+          <button class="refresh-btn" id="notReceivedRefreshBtn" type="button" aria-label="Refresh">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+              <path d="M12.5 2v3.5H9M1.5 12V8.5H5M11.5 5A4.5 4.5 0 0 0 3.2 4M2.5 9A4.5 4.5 0 0 0 10.8 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+        <div class="recent-list" id="notReceivedList"></div>
       </div>
 
     </section>
@@ -2336,6 +2372,14 @@
         <path d="M8 12.5l2.5 2.5L16 9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <span>Payouts</span>
+    </button>
+    <button class="tab" id="tabNotReceived" type="button" role="tab" aria-selected="false" aria-controls="notReceivedView" data-tab="notreceived">
+      <span class="tab-badge" id="notReceivedBadge" hidden></span>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M12 7.5v5M12 16v.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
+      <span>Not recv</span>
     </button>
     <button class="tab admin-only" id="tabAdmin" type="button" role="tab" aria-selected="false" aria-controls="adminView" data-tab="admin">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -2781,11 +2825,12 @@
     const ACTIVE_TAB_KEY = 'cubico-pay-active-tab';
     const tabButtons = document.querySelectorAll('.tab');
     const views = {
-      log:        document.getElementById('logView'),
-      activity:   document.getElementById('activityView'),
-      statements: document.getElementById('statementsView'),
-      payouts:    document.getElementById('payoutsView'),
-      admin:      document.getElementById('adminView'),
+      log:         document.getElementById('logView'),
+      activity:    document.getElementById('activityView'),
+      notreceived: document.getElementById('notReceivedView'),
+      statements:  document.getElementById('statementsView'),
+      payouts:     document.getElementById('payoutsView'),
+      admin:       document.getElementById('adminView'),
     };
     let currentTab = 'log';
 
@@ -2801,6 +2846,7 @@
       });
       try { localStorage.setItem(ACTIVE_TAB_KEY, name); } catch (e) { /* private mode */ }
       if (name === 'activity'   && typeof onShowActivity   === 'function') onShowActivity();
+      if (name === 'notreceived' && typeof onShowNotReceived === 'function') onShowNotReceived();
       if (name === 'statements' && typeof onShowStatements === 'function') onShowStatements();
       if (name === 'payouts'    && typeof onShowPayouts    === 'function') onShowPayouts();
       if (name === 'admin'      && typeof onShowAdmin      === 'function') onShowAdmin();
@@ -3196,17 +3242,23 @@
     const recentList  = document.getElementById('recentList');
 
     refreshBtn.addEventListener('click', () => loadDashboard());
+    const notReceivedRefreshBtn = document.getElementById('notReceivedRefreshBtn');
+    if (notReceivedRefreshBtn) notReceivedRefreshBtn.addEventListener('click', () => loadDashboard());
 
     // Dashboard pre-fetch is deferred until we know the session is good —
     // see onAuthReady() at the bottom of this script.
 
     // Click / keyboard to toggle a row's expanded detail.
-    recentList.addEventListener('click', (ev) => toggleRowFromEvent(ev));
-    recentList.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter' || ev.key === ' ') {
-        const row = ev.target.closest('.recent-row');
-        if (row) { ev.preventDefault(); toggleRow(row); }
-      }
+    const notReceivedList = document.getElementById('notReceivedList');
+    [recentList, notReceivedList].forEach((listEl) => {
+      if (!listEl) return;
+      listEl.addEventListener('click', (ev) => toggleRowFromEvent(ev));
+      listEl.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          const row = ev.target.closest('.recent-row');
+          if (row) { ev.preventDefault(); toggleRow(row); }
+        }
+      });
     });
 
     function toggleRowFromEvent(ev) {
@@ -3222,7 +3274,15 @@
     function onShowActivity() {
       if (dashboardCache.data) {
         renderSummary(dashboardCache.data.summary);
-        renderRecent(dashboardCache.data.alerts || []);
+        renderActivity(dashboardCache.data.alerts || []);
+      } else {
+        loadDashboard();
+      }
+    }
+
+    function onShowNotReceived() {
+      if (dashboardCache.data) {
+        renderNotReceived(dashboardCache.data.alerts || []);
       } else {
         loadDashboard();
       }
@@ -3282,6 +3342,11 @@
       if (payouts) {
         payouts.classList.toggle('spinning', on);
         payouts.disabled = on;
+      }
+      const notRecv = document.getElementById('notReceivedRefreshBtn');
+      if (notRecv) {
+        notRecv.classList.toggle('spinning', on);
+        notRecv.disabled = on;
       }
     }
 
@@ -3658,22 +3723,28 @@
     }
 
     function renderNotReceived(alerts) {
-      const section = document.getElementById('notReceivedSection');
       const list    = document.getElementById('notReceivedList');
       const countEl = document.getElementById('notReceivedCount');
-      if (!section || !list) return;
-      const items = alerts
+      const badge   = document.getElementById('notReceivedBadge');
+      if (!list) return;
+      const items = (alerts || [])
         .filter((e) => e.receipt === 'Not Received')
         .sort((a, b) => (typeof b.daysSince === 'number' ? b.daysSince : 0)
                       - (typeof a.daysSince === 'number' ? a.daysSince : 0));
+      const stale = items.filter((e) => typeof e.daysSince === 'number' && e.daysSince > 5).length;
+
+      // Bottom-tab badge counts the entries past 5 days (what needs chasing).
+      if (badge) {
+        if (stale > 0) { badge.textContent = String(stale); badge.hidden = false; }
+        else { badge.hidden = true; }
+      }
+
       if (!items.length) {
-        section.style.display = 'none';
-        list.innerHTML = '';
+        if (countEl) countEl.textContent = '';
+        list.innerHTML = '<div class="recent-empty"><em>Nothing here.</em><br>No payments are marked "Not Received".</div>';
         return;
       }
-      section.style.display = '';
-      const stale = items.filter((e) => typeof e.daysSince === 'number' && e.daysSince > 5).length;
-      if (countEl) countEl.textContent = stale > 0 ? (stale + ' over 5 days') : (items.length + ' total');
+      if (countEl) countEl.textContent = stale > 0 ? ('· ' + stale + ' over 5 days') : ('· ' + items.length + ' total');
       list.innerHTML = items.map(recentRowHtml).join('');
     }
 
