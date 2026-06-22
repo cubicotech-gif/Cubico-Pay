@@ -47,8 +47,13 @@ const COL = {
   paymentDate: 1,  clientName: 2,  usdAmount: 3,  account: 4,  receipt: 5,
   pkrAmount:   6,  feePct:     7,  finalPKR:   8,  paidStatus: 9, daysSince: 10,
   batchRef:   11,  roe:       12,  entryDate: 13,
-  actualUsd:  14,  actualSender: 15, paidDate: 16, clientId: 17, loggedBy: 18
+  actualUsd:  14,  actualSender: 15, paidDate: 16, clientId: 17, loggedBy: 18,
+  currency:   19,  screenshotUrl: 20
 };
+
+// Drive folder where logged payment screenshots are stored. Left blank →
+// the backend lazily creates / reuses a folder named SCREENSHOT_FOLDER_NAME.
+const SCREENSHOT_FOLDER_NAME = 'Cubico Pay Screenshots';
 
 // ============================================
 // GET DISPATCH
@@ -527,6 +532,21 @@ function handleLogPayment_(data, session) {
   sheet.getRange(targetRow, COL.clientId).setValue(clientId);
   sheet.getRange(targetRow, COL.loggedBy).setValue(session.username);
 
+  // Currency the amount was received in (recorded only — no conversion).
+  const currency = (String(data.currency || 'USD').trim().toUpperCase()) || 'USD';
+  sheet.getRange(targetRow, COL.currency).setValue(currency);
+
+  // Optional payment screenshot — saved to Drive, link stored in the row.
+  if (data.screenshot) {
+    try {
+      const url = saveScreenshot_(data.screenshot, clientName, paymentDate);
+      if (url) sheet.getRange(targetRow, COL.screenshotUrl).setValue(url);
+    } catch (err) {
+      // Non-fatal: never block logging a payment because an image failed.
+      console.error('Screenshot save failed: ' + err);
+    }
+  }
+
   // Apply the full standard formatting in one pass — supersedes the
   // per-cell setNumberFormat calls that used to live here.
   applyDataRangeFormatting_(sheet, targetRow, 1);
@@ -686,12 +706,23 @@ function getPaymentsSheetOrThrow_() {
  * Idempotent — safe to call before every write.
  */
 function ensureLoggedByColumn_(sheet) {
-  if (sheet.getMaxColumns() < COL.loggedBy) {
-    sheet.insertColumnsAfter(sheet.getMaxColumns(), COL.loggedBy - sheet.getMaxColumns());
+  ensureColumnHeader_(sheet, COL.loggedBy, 'loggedBy');
+  ensureColumnHeader_(sheet, COL.currency, 'currency');
+  ensureColumnHeader_(sheet, COL.screenshotUrl, 'screenshotUrl');
+}
+
+/**
+ * Make sure a given column physically exists and carries its header.
+ * Existing deployments may have a sheet narrower than the column map, so
+ * writes past the last column would otherwise be clipped. Idempotent.
+ */
+function ensureColumnHeader_(sheet, colIndex, headerText) {
+  if (sheet.getMaxColumns() < colIndex) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), colIndex - sheet.getMaxColumns());
   }
-  const header = sheet.getRange(1, COL.loggedBy);
+  const header = sheet.getRange(1, colIndex);
   if (!header.getValue()) {
-    header.setValue('loggedBy')
+    header.setValue(headerText)
           .setBackground(SHEET_FORMAT.headerBg)
           .setFontColor(SHEET_FORMAT.headerText)
           .setFontWeight('bold')
@@ -722,7 +753,7 @@ function readFilledRows_() {
   if (maxRows < 2) return [];
 
   const maxCols = sheet.getMaxColumns();
-  const readCols = Math.max(13, Math.min(18, maxCols));
+  const readCols = Math.max(13, Math.min(20, maxCols));
 
   const values = sheet.getRange(2, 1, maxRows - 1, readCols).getValues();
   const rows = [];
@@ -749,7 +780,9 @@ function readFilledRows_() {
       actualSenderName: readCols >= 15 ? r[14] : '',
       paidDate:         readCols >= 16 ? r[15] : '',
       clientId:         readCols >= 17 ? String(r[16] || '') : '',
-      loggedBy:         readCols >= 18 ? String(r[17] || '') : ''
+      loggedBy:         readCols >= 18 ? String(r[17] || '') : '',
+      currency:         readCols >= 19 ? String(r[18] || '') : '',
+      screenshotUrl:    readCols >= 20 ? String(r[19] || '') : ''
     });
   }
   return rows;
@@ -953,7 +986,9 @@ function serializeEntry_(r) {
     batchRef: r.batchRef || '',
     roe: isNumeric_(r.roe) ? r.roe : '',
     clientId: r.clientId || '',
-    loggedBy: r.loggedBy || ''
+    loggedBy: r.loggedBy || '',
+    currency: r.currency || 'USD',
+    screenshotUrl: r.screenshotUrl || ''
   };
 }
 
@@ -979,6 +1014,38 @@ function bustDashboardCache_(opts) {
 
 function getRowClientId_(sheet, row) {
   return String(sheet.getRange(row, COL.clientId).getValue() || '');
+}
+
+// ============================================
+// SCREENSHOT STORAGE (Google Drive)
+// ============================================
+
+/**
+ * Decode a base64 data-URL screenshot, save it to the screenshots Drive
+ * folder, share it as view-only-by-link, and return the file URL.
+ * Returns '' if the payload isn't a recognisable data URL.
+ */
+function saveScreenshot_(dataUrl, clientName) {
+  const m = /^data:([^;]+);base64,([\s\S]*)$/.exec(String(dataUrl));
+  if (!m) return '';
+  const contentType = m[1];
+  const bytes = Utilities.base64Decode(m[2]);
+  const ext = contentType === 'image/png' ? 'png'
+            : contentType === 'image/webp' ? 'webp' : 'jpg';
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+  const stamp = Utilities.formatDate(new Date(), tz, 'yyyyMMdd-HHmmss');
+  const safeName = String(clientName || 'payment').replace(/[^\w.-]+/g, '_').slice(0, 40) || 'payment';
+  const blob = Utilities.newBlob(bytes, contentType, safeName + '-' + stamp + '.' + ext);
+  const file = getScreenshotFolder_().createFile(blob);
+  try {
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (e) { /* sharing policy may forbid link sharing; keep the file */ }
+  return file.getUrl();
+}
+
+function getScreenshotFolder_() {
+  const it = DriveApp.getFoldersByName(SCREENSHOT_FOLDER_NAME);
+  return it.hasNext() ? it.next() : DriveApp.createFolder(SCREENSHOT_FOLDER_NAME);
 }
 
 // ============================================
