@@ -1332,6 +1332,36 @@
     .summary-card.is-clickable { cursor: pointer; }
     .summary-card.is-clickable:active { transform: scale(0.98); }
 
+    /* ---- Party / vendor manager (Log form) ---- */
+    .link-btn {
+      border: none; background: transparent; color: var(--coral-deep);
+      font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 600;
+      cursor: pointer; padding: 0;
+    }
+    .party-manage {
+      margin-top: 10px; padding: 12px; border: 1px solid var(--border);
+      border-radius: 12px; background: var(--bg);
+    }
+    .party-add-row { display: flex; gap: 8px; }
+    .party-add-row .input { flex: 1 1 auto; }
+    .party-add-btn { flex: 0 0 auto; white-space: nowrap; }
+    .party-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+    .party-list:empty { display: none; }
+    .party-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 600; color: var(--navy);
+      background: var(--surface); border: 1px solid var(--border-strong);
+      border-radius: 999px; padding: 5px 6px 5px 12px;
+    }
+    .party-pill-x {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 18px; height: 18px; border: none; border-radius: 50%;
+      background: var(--border); color: var(--muted); font-size: 13px; line-height: 1;
+      cursor: pointer; padding: 0;
+    }
+    .party-pill-x:hover { background: var(--coral-soft); color: var(--coral-deep); }
+    .party-empty { font-size: 12px; color: var(--muted-soft); font-family: 'DM Sans', sans-serif; }
+
     /* ---- Screenshot upload ---- */
     .file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
     .file-drop {
@@ -1959,10 +1989,21 @@
 
         <div class="field client-only">
           <div class="field-label">
-            <label for="vendorName">Vendor name</label>
-            <span class="hint">Optional</span>
+            <label for="vendorParty">Party / vendor</label>
+            <button type="button" class="link-btn" id="managePartiesBtn">Manage parties</button>
           </div>
-          <input type="text" id="vendorName" name="vendorName" class="input" placeholder="Leave blank to log under your own name" autocomplete="off" />
+          <div class="select-wrapper">
+            <select id="vendorParty" name="vendorParty" class="select">
+              <option value="">Log under my own name</option>
+            </select>
+          </div>
+          <div class="party-manage" id="partyManage" style="display:none;">
+            <div class="party-add-row">
+              <input type="text" id="partyAddInput" class="input" placeholder="New party name" maxlength="80" autocomplete="off" />
+              <button type="button" class="btn btn-ghost party-add-btn" id="partyAddBtn">Add</button>
+            </div>
+            <div class="party-list" id="partyList"></div>
+          </div>
         </div>
 
         <div class="field admin-only">
@@ -1977,6 +2018,16 @@
           </div>
           <div class="form-note" id="noClientsHint" style="display:none;margin-top:8px;">
             <strong>No client accounts yet.</strong> Add one in the Team tab first, then come back here to log on their behalf.
+          </div>
+        </div>
+
+        <div class="field admin-only" id="adminPartyField" style="display:none;">
+          <div class="field-label">
+            <label for="adminVendorParty">Saved party</label>
+            <span class="hint">Fills sender name</span>
+          </div>
+          <div class="select-wrapper">
+            <select id="adminVendorParty" name="adminVendorParty" class="select"></select>
           </div>
         </div>
 
@@ -2147,6 +2198,7 @@
             <button id="filterSearchClear" type="button" class="filter-search-clear" aria-label="Clear search">&times;</button>
           </div>
           <div class="chip-row" id="statusChips" aria-label="Filter by status"></div>
+          <div class="chip-row" id="partyChips" aria-label="Filter by party"></div>
           <div class="chip-row" id="accountChips" aria-label="Filter by account"></div>
           <div class="filter-foot">
             <span class="filter-count" id="filterCount"></span>
@@ -2937,8 +2989,8 @@
         payload.clientId   = picker.value;
         payload.clientName = cname;
       } else {
-        const vendor = document.getElementById('vendorName').value.trim();
-        if (vendor) payload.clientName = vendor;
+        const party = document.getElementById('vendorParty').value.trim();
+        if (party) payload.clientName = party;
       }
 
       window.lastSubmission = Object.assign({ clientName: payload.clientName || session.username }, payload);
@@ -2998,11 +3050,14 @@
       const acctSel = document.getElementById('account');
       if (acctSel) acctSel.dispatchEvent(new Event('change'));
       document.getElementById('paymentDate').value = `${yyyy}-${mm}-${dd}`;
-      // form.reset() also clears the optional Vendor field — make that
-      // explicit so it doesn't accidentally retain a value if a future
-      // change adds a default.
-      const vendorEl = document.getElementById('vendorName');
-      if (vendorEl) vendorEl.value = '';
+      // form.reset() also clears the party dropdown — make that explicit,
+      // and collapse the manage panel if it was left open.
+      const partyEl = document.getElementById('vendorParty');
+      if (partyEl) partyEl.value = '';
+      const partyPanel = document.getElementById('partyManage');
+      if (partyPanel) partyPanel.style.display = 'none';
+      const manageBtn = document.getElementById('managePartiesBtn');
+      if (manageBtn) manageBtn.textContent = 'Manage parties';
       // form.reset() restores the default-checked Pending radio; sync the
       // pill UI so its `active` class matches.
       pills.forEach((p) => {
@@ -3723,7 +3778,7 @@
 
     // ---------- Activity: Not Received box + chip filters / search / sort ----------
     let activityEntries = [];
-    const activityFilters = { status: 'all', account: '', search: '', sort: 'newest' };
+    const activityFilters = { status: 'all', account: '', party: '', search: '', sort: 'newest' };
 
     // Each status chip is a predicate over one entry. "unpriced" surfaces
     // money that has arrived but has no ROE yet — those rows are otherwise
@@ -3754,6 +3809,7 @@
     function renderActivity(entries) {
       activityEntries = Array.isArray(entries) ? entries.slice() : [];
       renderStatusChips();
+      renderPartyChips(activityEntries);
       renderAccountChips(activityEntries);
       renderNotReceived(activityEntries);
       applyActivityFilters();
@@ -3802,6 +3858,22 @@
       }).join('');
     }
 
+    function renderPartyChips(entries) {
+      const wrap = document.getElementById('partyChips');
+      if (!wrap) return;
+      // Party filtering is meaningful for a client (their own vendors). For
+      // admin the sender-name space is huge, so free-text search covers it.
+      if (!session || session.role !== 'client') { wrap.innerHTML = ''; return; }
+      const present = Array.from(new Set(entries
+        .filter((e) => e.receipt !== 'Not Received')
+        .map((e) => e.clientName).filter(Boolean)));
+      if (present.length < 2) { wrap.innerHTML = ''; return; }
+      wrap.innerHTML = present.map((p) => {
+        const active = activityFilters.party === p ? ' active' : '';
+        return `<button type="button" class="fchip fchip-party${active}" data-party="${escapeHtml(p)}">${escapeHtml(p)}</button>`;
+      }).join('');
+    }
+
     function renderAccountChips(entries) {
       const wrap = document.getElementById('accountChips');
       if (!wrap) return;
@@ -3818,12 +3890,13 @@
 
     function filtersActive() {
       const f = activityFilters;
-      return f.status !== 'all' || !!f.account || !!(f.search && f.search.trim());
+      return f.status !== 'all' || !!f.account || !!f.party || !!(f.search && f.search.trim());
     }
 
     function applyActivityFilters() {
       const f = activityFilters;
       let items = activityBase().filter((e) => matchStatus(e, f.status));
+      if (f.party)   items = items.filter((e) => e.clientName === f.party);
       if (f.account) items = items.filter((e) => e.account === f.account);
       if (f.search && f.search.trim()) {
         const q = f.search.trim().toLowerCase();
@@ -3889,6 +3962,16 @@
         applyActivityFilters();
       });
 
+      const partyWrap = document.getElementById('partyChips');
+      if (partyWrap) partyWrap.addEventListener('click', (ev) => {
+        const btn = ev.target.closest('.fchip');
+        if (!btn) return;
+        const p = btn.dataset.party || '';
+        activityFilters.party = (activityFilters.party === p) ? '' : p;   // toggle
+        renderPartyChips(activityEntries);
+        applyActivityFilters();
+      });
+
       const search = document.getElementById('filterSearch');
       const searchClear = document.getElementById('filterSearchClear');
       if (search) search.addEventListener('input', () => {
@@ -3913,10 +3996,12 @@
       if (clearBtn) clearBtn.addEventListener('click', () => {
         activityFilters.status = 'all';
         activityFilters.account = '';
+        activityFilters.party = '';
         activityFilters.search = '';
         if (search) search.value = '';
         if (searchClear) searchClear.style.display = 'none';
         renderStatusChips();
+        renderPartyChips(activityEntries);
         renderAccountChips(activityEntries);
         applyActivityFilters();
       });
@@ -4380,7 +4465,124 @@
       if (uname && !clientNameInput.value.trim()) {
         clientNameInput.value = uname;
       }
+      loadPartiesForAdmin(cid);   // mirror the client's saved party list
     });
+
+    // ============================================================
+    // PARTIES — per-client vendor list (dropdown + manage panel)
+    // ============================================================
+    let myParties = [];   // the logged-in client's own parties
+
+    // ---- Client: load + render own parties ----
+    async function loadPartiesForClient() {
+      if (!session || session.role !== 'client') return;
+      try {
+        const r = await apiGet('parties.list');
+        if (r.ok) { myParties = r.parties || []; renderPartyDropdown(); }
+      } catch (err) { /* non-fatal */ }
+    }
+
+    function renderPartyDropdown() {
+      const sel = document.getElementById('vendorParty');
+      if (!sel) return;
+      const prev = sel.value;
+      sel.innerHTML = '<option value="">Log under my own name</option>'
+        + myParties.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
+      if (myParties.indexOf(prev) !== -1) sel.value = prev;
+      renderPartyManageList();
+    }
+
+    function renderPartyManageList() {
+      const list = document.getElementById('partyList');
+      if (!list) return;
+      if (!myParties.length) {
+        list.innerHTML = '<span class="party-empty">No parties yet — add your first one above.</span>';
+        return;
+      }
+      list.innerHTML = myParties.map((p) =>
+        `<span class="party-pill">${escapeHtml(p)}`
+        + `<button type="button" class="party-pill-x" data-party="${escapeHtml(p)}" aria-label="Remove ${escapeHtml(p)}">&times;</button>`
+        + '</span>'
+      ).join('');
+    }
+
+    async function addPartyClient(name) {
+      const party = String(name || '').trim();
+      if (!party) return;
+      try {
+        const r = await apiPost('parties.add', { party: party });
+        if (!r.ok) { showError("Couldn't add party", r.error || 'Try again.'); return; }
+        myParties = r.parties || [];
+        renderPartyDropdown();
+        const sel = document.getElementById('vendorParty');
+        if (sel && myParties.indexOf(party) !== -1) sel.value = party;   // auto-select the new one
+      } catch (err) {
+        showError('Network error', err.message || 'Try again.');
+      }
+    }
+
+    async function removePartyClient(name) {
+      try {
+        const r = await apiPost('parties.remove', { party: name });
+        if (!r.ok) { showError("Couldn't remove party", r.error || 'Try again.'); return; }
+        myParties = r.parties || [];
+        renderPartyDropdown();
+      } catch (err) {
+        showError('Network error', err.message || 'Try again.');
+      }
+    }
+
+    (function wirePartyControls() {
+      const manageBtn = document.getElementById('managePartiesBtn');
+      const panel     = document.getElementById('partyManage');
+      const addInput  = document.getElementById('partyAddInput');
+      const addBtn    = document.getElementById('partyAddBtn');
+      const list      = document.getElementById('partyList');
+      if (manageBtn && panel) manageBtn.addEventListener('click', () => {
+        const open = panel.style.display === 'none';
+        panel.style.display = open ? 'block' : 'none';
+        manageBtn.textContent = open ? 'Done' : 'Manage parties';
+        if (open) renderPartyManageList();
+      });
+      const submitAdd = () => {
+        if (!addInput) return;
+        const v = addInput.value.trim();
+        if (!v) return;
+        addInput.value = '';
+        addPartyClient(v);
+      };
+      if (addBtn) addBtn.addEventListener('click', submitAdd);
+      if (addInput) addInput.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') { ev.preventDefault(); submitAdd(); }
+      });
+      if (list) list.addEventListener('click', (ev) => {
+        const x = ev.target.closest('.party-pill-x');
+        if (x) removePartyClient(x.dataset.party || '');
+      });
+    })();
+
+    // ---- Admin: load a chosen client's parties into the mirror dropdown ----
+    async function loadPartiesForAdmin(clientId) {
+      const field = document.getElementById('adminPartyField');
+      const sel   = document.getElementById('adminVendorParty');
+      if (!field || !sel) return;
+      if (!clientId) { field.style.display = 'none'; sel.innerHTML = ''; return; }
+      try {
+        const r = await apiGet('parties.list', { clientId: clientId });
+        const parties = (r.ok && r.parties) ? r.parties : [];
+        sel.innerHTML = '<option value="">— pick a saved party —</option>'
+          + parties.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
+        field.style.display = parties.length ? '' : 'none';
+      } catch (err) { field.style.display = 'none'; }
+    }
+
+    (function wireAdminPartyPick() {
+      const sel = document.getElementById('adminVendorParty');
+      if (!sel) return;
+      sel.addEventListener('change', () => {
+        if (sel.value && clientNameInput) clientNameInput.value = sel.value;   // fill sender name
+      });
+    })();
 
     // ============================================================
     // BOOT — orchestrate auth check + per-role wiring
@@ -4390,6 +4592,7 @@
       applyRole(session.role);
       if (navigator.onLine) loadDashboard();
       if (session.role === 'admin') loadClientsForPicker();
+      if (session.role === 'client') loadPartiesForClient();
       // Restore saved tab now that we know the role.
       try {
         const saved = localStorage.getItem(ACTIVE_TAB_KEY);
