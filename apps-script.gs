@@ -77,11 +77,14 @@ function doGet(e) {
 
   try {
     if (action === 'me') {
+      const u = findUser_(session.username);
       return jsonResponse({
         ok: true,
-        username: session.username,
-        role:     session.role,
-        clientId: session.clientId
+        username:  session.username,
+        role:      session.role,
+        clientId:  session.clientId,
+        email:     u ? u.email : '',
+        ledgerUrl: u ? u.ledgerUrl : ''
       });
     }
 
@@ -141,6 +144,8 @@ function doPost(e) {
     if (action === 'parties.add')     return handleAddParty_(data, session);
     if (action === 'parties.remove')  return handleRemoveParty_(data, session);
     if (action === 'parties.setRate') return handleSetPartyRate_(data, session);
+    if (action === 'profile.setEmail') return handleSetEmail_(data, session);
+    if (action === 'ledger.sync')      return handleLedgerSync_(data, session);
 
     // ---- Admin-only ----
     if (session.role !== 'admin') return jsonResponse({ ok: false, error: 'Forbidden' });
@@ -200,6 +205,8 @@ function handleLogin_(data) {
     username: user.username,
     role: user.role,
     clientId: user.clientId,
+    email: user.email || '',
+    ledgerUrl: user.ledgerUrl || '',
     expiresAt: Date.now() + SESSION_TTL_MS
   });
 }
@@ -305,17 +312,26 @@ function normUsername_(u) {
 // USERS TAB
 // ============================================
 
+// Users columns: 1 username · 2 passwordHash · 3 salt · 4 role · 5 clientId
+// · 6 active · 7 createdAt · 8 email · 9 ledgerUrl (personal ledger sheet).
 function getUsersSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(USERS_SHEET);
   if (!sheet) {
     sheet = ss.insertSheet(USERS_SHEET);
-    sheet.getRange(1, 1, 1, 7).setValues([
-      ['username', 'passwordHash', 'salt', 'role', 'clientId', 'active', 'createdAt']
+    sheet.getRange(1, 1, 1, 9).setValues([
+      ['username', 'passwordHash', 'salt', 'role', 'clientId', 'active', 'createdAt', 'email', 'ledgerUrl']
     ]);
     sheet.setFrozenRows(1);
     sheet.setColumnWidth(2, 320);
     sheet.setColumnWidth(3, 220);
+  } else if (sheet.getMaxColumns() < 9 || !sheet.getRange(1, 8).getValue()) {
+    // Migrate an older 7-column Users sheet: add email + ledgerUrl.
+    if (sheet.getMaxColumns() < 9) {
+      sheet.insertColumnsAfter(sheet.getMaxColumns(), 9 - sheet.getMaxColumns());
+    }
+    if (!sheet.getRange(1, 8).getValue()) sheet.getRange(1, 8).setValue('email');
+    if (!sheet.getRange(1, 9).getValue()) sheet.getRange(1, 9).setValue('ledgerUrl');
   }
   return sheet;
 }
@@ -325,7 +341,7 @@ function findUser_(username) {
   const last = sheet.getLastRow();
   if (last < 2) return null;
   const u = normUsername_(username);
-  const values = sheet.getRange(2, 1, last - 1, 7).getValues();
+  const values = sheet.getRange(2, 1, last - 1, 9).getValues();
   for (let i = 0; i < values.length; i++) {
     const r = values[i];
     if (normUsername_(r[0]) === u) {
@@ -337,7 +353,34 @@ function findUser_(username) {
         role: String(r[3]),
         clientId: String(r[4] || ''),
         active: toBool_(r[5]),
-        createdAt: r[6]
+        createdAt: r[6],
+        email: String(r[7] || ''),
+        ledgerUrl: String(r[8] || '')
+      };
+    }
+  }
+  return null;
+}
+
+// Find the (client) user account that owns a given clientId.
+function findUserByClientId_(clientId) {
+  const cid = String(clientId || '').trim();
+  if (!cid) return null;
+  const sheet = getUsersSheet_();
+  const last = sheet.getLastRow();
+  if (last < 2) return null;
+  const values = sheet.getRange(2, 1, last - 1, 9).getValues();
+  for (let i = 0; i < values.length; i++) {
+    const r = values[i];
+    if (String(r[4] || '').trim() === cid) {
+      return {
+        row: i + 2,
+        username: String(r[0]),
+        role: String(r[3]),
+        clientId: cid,
+        active: toBool_(r[5]),
+        email: String(r[7] || ''),
+        ledgerUrl: String(r[8] || '')
       };
     }
   }
@@ -532,11 +575,113 @@ function handleAddUser_(data) {
   }
   if (findUser_(username)) return jsonResponse({ ok: false, error: 'Username already exists' });
 
+  const email = String(data.email || '').trim();
+  if (email && !isValidEmail_(email)) {
+    return jsonResponse({ ok: false, error: 'Invalid email address' });
+  }
+
   const sheet = getUsersSheet_();
   const salt = generateSalt_();
   const hash = hashPassword_(password, salt);
-  sheet.appendRow([username, hash, salt, role, clientId, true, new Date()]);
+  sheet.appendRow([username, hash, salt, role, clientId, true, new Date(), email, '']);
   return jsonResponse({ ok: true });
+}
+
+function isValidEmail_(email) {
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(email || '').trim());
+}
+
+// ============================================
+// PROFILE + PERSONAL LEDGER (C3)
+// ============================================
+// A client can attach their email and get a personal ledger spreadsheet
+// auto-created in the workspace Drive and shared to that email. Their
+// payments, party payables and profit are written into it.
+
+function handleSetEmail_(data, session) {
+  const user = ledgerTargetUser_(data, session);
+  if (!user) return jsonResponse({ ok: false, error: 'User not found' });
+  const email = String(data.email || '').trim();
+  if (email && !isValidEmail_(email)) return jsonResponse({ ok: false, error: 'Invalid email address' });
+  getUsersSheet_().getRange(user.row, 8).setValue(email);
+  return jsonResponse({ ok: true, email: email });
+}
+
+// Resolve which account a profile/ledger action targets: admins act on the
+// passed clientId (managing on behalf), everyone else acts on themselves.
+function ledgerTargetUser_(data, session) {
+  if (session.role === 'admin') {
+    const cid = String(data.clientId || '').trim();
+    if (cid) return findUserByClientId_(cid);
+  }
+  return findUser_(session.username);
+}
+
+function handleLedgerSync_(data, session) {
+  const user = ledgerTargetUser_(data, session);
+  if (!user) return jsonResponse({ ok: false, error: 'User not found' });
+  if (!user.clientId) return jsonResponse({ ok: false, error: 'Only client accounts have a ledger' });
+  if (!user.email || !isValidEmail_(user.email)) {
+    return jsonResponse({ ok: false, error: 'Add your email first so we can share the sheet with you.' });
+  }
+
+  // Reuse the existing ledger sheet if we still have a working link.
+  let ss = null;
+  if (user.ledgerUrl) {
+    try { ss = SpreadsheetApp.openByUrl(user.ledgerUrl); } catch (e) { ss = null; }
+  }
+  if (!ss) {
+    ss = SpreadsheetApp.create('Cubico Ledger — ' + user.username);
+    try { DriveApp.getFileById(ss.getId()).addEditor(user.email); } catch (e) { /* share best-effort */ }
+    getUsersSheet_().getRange(user.row, 9).setValue(ss.getUrl());
+  }
+
+  writeLedger_(ss, user);
+  return jsonResponse({ ok: true, url: ss.getUrl() });
+}
+
+// Rebuild the client's personal ledger sheet from their current payments
+// and party rates. Idempotent — clears and rewrites the "Ledger" tab.
+function writeLedger_(ss, user) {
+  const cid = user.clientId;
+  const rows = readFilledRows_().filter((r) => String(r.clientId || '') === cid);
+  const rateOf = {};
+  listParties_(cid).forEach((p) => { rateOf[p.name.toLowerCase()] = p; });
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+
+  let sheet = ss.getSheetByName('Ledger');
+  if (!sheet) sheet = ss.insertSheet('Ledger');
+  sheet.clear();
+
+  const header = ['Date', 'Party', 'Sender', 'USD', 'Receivable (PKR)', 'Payable (PKR)', 'Profit (PKR)', 'Receipt', 'Paid'];
+  const out = [header];
+  let tRec = 0, tPay = 0, tProfit = 0;
+
+  rows.forEach((r) => {
+    const usd = isNumeric_(r.usdAmount) ? r.usdAmount : '';
+    const rec = isNumeric_(r.finalPKR) ? r.finalPKR : '';
+    const rate = rateOf[String(r.clientName || '').toLowerCase()];
+    let pay = '';
+    if (rate && rate.roe > 0 && isNumeric_(r.usdAmount)) {
+      const gross = r.usdAmount * rate.roe;
+      pay = round2_(gross - gross * (Number(rate.feePct) || 0) / 100);
+    }
+    let profit = '';
+    if (rec !== '' && pay !== '') profit = round2_(rec - pay);
+    const date = r.paymentDate instanceof Date ? Utilities.formatDate(r.paymentDate, tz, 'yyyy-MM-dd') : '';
+    out.push([date, r.clientName || '', r.actualSenderName || '', usd, rec, pay, profit, r.receipt || '', r.paidStatus || '']);
+    if (typeof rec === 'number') tRec += rec;
+    if (typeof pay === 'number') tPay += pay;
+    if (typeof profit === 'number') tProfit += profit;
+  });
+
+  out.push(['', '', '', '', '', '', '', '', '']);
+  out.push(['TOTAL', '', '', '', round2_(tRec), round2_(tPay), round2_(tProfit), '', '']);
+
+  sheet.getRange(1, 1, out.length, header.length).setValues(out);
+  sheet.setFrozenRows(1);
+  sheet.getRange(1, 1, 1, header.length).setFontWeight('bold');
+  sheet.getRange(out.length, 1, 1, header.length).setFontWeight('bold');
 }
 
 function handleRemoveUser_(data) {

@@ -1418,6 +1418,18 @@
       margin-top: 1px;
     }
 
+    /* ---- Personal ledger card (client) ---- */
+    .ledger-card {
+      border: 1px solid var(--border); border-radius: 14px; padding: 14px;
+      background: var(--surface); margin-bottom: 18px; box-shadow: var(--shadow-sm);
+    }
+    .ledger-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+    .ledger-title { font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 700; color: var(--navy); }
+    .ledger-sub { font-family: 'DM Sans', sans-serif; font-size: 12px; color: var(--muted-soft); cursor: pointer; }
+    .ledger-row { display: flex; gap: 8px; align-items: center; }
+    .ledger-row .input { flex: 1 1 auto; }
+    .ledger-row .btn { flex: 0 0 auto; white-space: nowrap; }
+
     /* ---- Screenshot upload ---- */
     .file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
     .file-drop {
@@ -2247,6 +2259,21 @@
         </div>
       </div>
 
+      <div class="ledger-card client-only" id="ledgerCard" style="display:none;">
+        <div class="ledger-head">
+          <span class="ledger-title">My ledger sheet</span>
+          <span class="ledger-sub" id="ledgerSub"></span>
+        </div>
+        <div class="ledger-row" id="ledgerEmailRow" style="display:none;">
+          <input type="email" id="ledgerEmail" class="input" placeholder="your@gmail.com" autocomplete="email" inputmode="email">
+          <button type="button" class="btn btn-ghost" id="ledgerEmailSave">Save</button>
+        </div>
+        <div class="ledger-row" id="ledgerActions" style="display:none;">
+          <a id="ledgerOpen" class="btn btn-ghost" target="_blank" rel="noopener" href="#" style="display:none;">Open ledger&nbsp;↗</a>
+          <button type="button" class="btn btn-primary" id="ledgerSyncBtn">Create my ledger</button>
+        </div>
+      </div>
+
       <div class="recent-section">
         <div class="recent-section-header">
           <span class="recent-section-title">All payments</span>
@@ -2896,6 +2923,8 @@
             username: r.username,
             role: r.role,
             clientId: r.clientId,
+            email: r.email || '',
+            ledgerUrl: r.ledgerUrl || '',
             expiresAt: r.expiresAt
           });
           loginPass.value = '';
@@ -4942,6 +4971,86 @@
     })();
 
     // ============================================================
+    // PERSONAL LEDGER (C3) — a client attaches their email and gets a
+    // Google Sheet auto-created and shared to them, refreshed on demand.
+    // ============================================================
+    function renderLedgerCard() {
+      const card = document.getElementById('ledgerCard');
+      if (!card) return;
+      if (!session || session.role !== 'client') { card.style.display = 'none'; return; }
+      card.style.display = '';
+      const emailRow  = document.getElementById('ledgerEmailRow');
+      const actions   = document.getElementById('ledgerActions');
+      const sub       = document.getElementById('ledgerSub');
+      const openLink  = document.getElementById('ledgerOpen');
+      const syncBtn   = document.getElementById('ledgerSyncBtn');
+      const hasEmail  = !!(session.email && session.email.trim());
+      const hasLedger = !!(session.ledgerUrl && session.ledgerUrl.trim());
+      if (!hasEmail) {
+        if (sub) sub.textContent = 'Add your email to get your own sheet';
+        if (emailRow) emailRow.style.display = 'flex';
+        if (actions) actions.style.display = 'none';
+      } else {
+        if (sub) sub.textContent = session.email + '  ·  change';
+        if (emailRow) emailRow.style.display = 'none';
+        if (actions) actions.style.display = 'flex';
+        if (openLink) {
+          if (hasLedger) { openLink.href = session.ledgerUrl; openLink.style.display = ''; }
+          else openLink.style.display = 'none';
+        }
+        if (syncBtn) syncBtn.textContent = hasLedger ? 'Sync now' : 'Create my ledger';
+      }
+    }
+
+    (function wireLedger() {
+      const emailInput = document.getElementById('ledgerEmail');
+      const emailSave  = document.getElementById('ledgerEmailSave');
+      const syncBtn    = document.getElementById('ledgerSyncBtn');
+      const sub        = document.getElementById('ledgerSub');
+
+      if (emailSave) emailSave.addEventListener('click', async () => {
+        const email = (emailInput.value || '').trim();
+        if (!email) return;
+        emailSave.disabled = true; emailSave.textContent = 'Saving…';
+        try {
+          const r = await apiPost('profile.setEmail', { email: email });
+          if (!r.ok) { showError("Couldn't save email", r.error || 'Try again.'); return; }
+          session.email = r.email || email;
+          saveSession(session);
+          renderLedgerCard();
+        } catch (err) {
+          showError('Network error', err.message || 'Try again.');
+        } finally {
+          emailSave.disabled = false; emailSave.textContent = 'Save';
+        }
+      });
+
+      if (syncBtn) syncBtn.addEventListener('click', async () => {
+        const label = syncBtn.textContent;
+        syncBtn.disabled = true; syncBtn.textContent = 'Working…';
+        try {
+          const r = await apiPost('ledger.sync', {}, { timeoutMs: 60000 });
+          if (!r.ok) { showError("Couldn't build ledger", r.error || 'Try again.'); return; }
+          session.ledgerUrl = r.url || session.ledgerUrl;
+          saveSession(session);
+        } catch (err) {
+          showError('Network error', err.message || 'Try again.');
+        } finally {
+          syncBtn.disabled = false; syncBtn.textContent = label;
+          renderLedgerCard();
+        }
+      });
+
+      // Tap the email line to change it.
+      if (sub) sub.addEventListener('click', () => {
+        if (!session || !session.email) return;
+        const row = document.getElementById('ledgerEmailRow');
+        if (row) row.style.display = 'flex';
+        if (emailInput) { emailInput.value = session.email; emailInput.focus(); }
+      });
+    })();
+
+    // ============================================================
     // BOOT — orchestrate auth check + per-role wiring
     // ============================================================
     function onAuthReady() {
@@ -4949,7 +5058,7 @@
       applyRole(session.role);
       if (navigator.onLine) loadDashboard();
       if (session.role === 'admin') loadClientsForPicker();
-      if (session.role === 'client') loadPartiesForClient();
+      if (session.role === 'client') { loadPartiesForClient(); renderLedgerCard(); }
       // Restore saved tab now that we know the role.
       try {
         const saved = localStorage.getItem(ACTIVE_TAB_KEY);
@@ -4974,6 +5083,8 @@
         session.role     = me.role;
         session.clientId = me.clientId;
         session.username = me.username;
+        session.email    = me.email || '';
+        session.ledgerUrl = me.ledgerUrl || '';
         saveSession(session);
         hideAuthScreen();
         onAuthReady();
