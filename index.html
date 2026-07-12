@@ -1361,6 +1361,62 @@
     }
     .party-pill-x:hover { background: var(--coral-soft); color: var(--coral-deep); }
     .party-empty { font-size: 12px; color: var(--muted-soft); font-family: 'DM Sans', sans-serif; }
+    .party-list { flex-direction: column; }
+    .party-item {
+      width: 100%; border: 1px solid var(--border-strong); border-radius: 12px;
+      padding: 10px 12px; background: var(--surface);
+    }
+    .party-item-head { display: flex; align-items: center; justify-content: space-between; }
+    .party-item-name { font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 700; color: var(--navy); }
+    .party-item-rates { display: flex; align-items: flex-end; gap: 8px; margin-top: 8px; }
+    .party-item-rates label {
+      display: flex; flex-direction: column; gap: 3px; flex: 1 1 auto;
+      font-family: 'DM Sans', sans-serif; font-size: 10px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted-soft);
+    }
+    .party-item-rates input {
+      width: 100%; font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--navy);
+      background: var(--bg); border: 1px solid var(--border-strong); border-radius: 8px;
+      padding: 7px 8px; -webkit-appearance: none; appearance: none;
+    }
+    .party-item-rates input:focus { outline: none; border-color: var(--coral); }
+    .party-save { flex: 0 0 auto; white-space: nowrap; }
+
+    /* ---- Date range picker (client Activity) ---- */
+    .date-range { display: flex; align-items: flex-end; gap: 8px; }
+    .date-range label {
+      display: flex; flex-direction: column; gap: 3px; flex: 1 1 auto;
+      font-family: 'DM Sans', sans-serif; font-size: 10px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted-soft);
+    }
+    .date-range input {
+      width: 100%; font-family: 'DM Sans', sans-serif; font-size: 12px; color: var(--navy);
+      background: var(--surface); border: 1px solid var(--border-strong); border-radius: 10px;
+      padding: 7px 9px; -webkit-appearance: none; appearance: none;
+    }
+    .date-range input:focus { outline: none; border-color: var(--coral); }
+    .date-range-clear {
+      flex: 0 0 auto; border: none; background: var(--border); color: var(--muted);
+      width: 30px; height: 32px; border-radius: 8px; font-size: 16px; cursor: pointer;
+    }
+
+    /* ---- Date-grouped activity (client PayPal-style) ---- */
+    .date-group { margin-bottom: 6px; }
+    .date-group-head {
+      display: flex; align-items: baseline; justify-content: space-between;
+      padding: 10px 2px 6px; position: sticky; top: 0;
+    }
+    .date-group-label {
+      font-family: 'DM Sans', sans-serif; font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+    }
+    .date-group-sum {
+      font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; color: var(--navy);
+    }
+    .recent-sub {
+      font-family: 'DM Sans', sans-serif; font-size: 12px; color: var(--muted-soft);
+      margin-top: 1px;
+    }
 
     /* ---- Screenshot upload ---- */
     .file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
@@ -2206,6 +2262,11 @@
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
             <input id="filterSearch" type="search" placeholder="Search name, account, sender, batch…" autocomplete="off" enterkeyhint="search">
             <button id="filterSearchClear" type="button" class="filter-search-clear" aria-label="Clear search">&times;</button>
+          </div>
+          <div class="date-range client-only" id="dateRange">
+            <label>From<input type="date" id="fromDate" aria-label="From date"></label>
+            <label>To<input type="date" id="toDate" aria-label="To date"></label>
+            <button type="button" class="date-range-clear" id="dateRangeClear" hidden aria-label="Clear dates">&times;</button>
           </div>
           <div class="chip-row" id="statusChips" aria-label="Filter by status"></div>
           <div class="chip-row" id="partyChips" aria-label="Filter by party"></div>
@@ -3381,11 +3442,69 @@
     function onShowActivity() {
       if (dashboardCache.data) {
         const entries = dashboardCache.data.allEntries || [];
-        renderSummary(summaryFromEntries(entries));
+        renderDashSummary(entries);
         renderActivity(entries);
         renderNotReceived(entries);   // keep the bottom-tab badge fresh
       } else {
         loadDashboard();
+      }
+    }
+
+    // Admin sees the payout KPIs; a client sees their own money circle
+    // (Receivable / Payable / Profit), respecting the Activity date range.
+    function renderDashSummary(entries) {
+      if (session && session.role === 'client') renderClientSummary(entries);
+      else renderSummary(summaryFromEntries(entries));
+    }
+
+    function dateInRange(e) {
+      const f = activityFilters;
+      if (f.fromDate && !(e.paymentDate && e.paymentDate >= f.fromDate)) return false;
+      if (f.toDate   && !(e.paymentDate && e.paymentDate <= f.toDate))   return false;
+      return true;
+    }
+
+    function renderClientSummary(entries) {
+      let receivable = 0, payable = 0, profit = 0, count = 0;
+      (entries || []).forEach((e) => {
+        if (e.receipt === 'Not Received') return;
+        if (!dateInRange(e)) return;
+        count += 1;
+        const rec = entryReceivable(e); if (rec != null) receivable += rec;
+        const pay = entryPayable(e);    if (pay != null) payable += pay;
+        const pr  = entryProfit(e);     if (pr  != null) profit += pr;
+      });
+      setClientCard('unpaid',  'Receivable', formatPKR(receivable));
+      setClientCard('overdue', 'Payable',    formatPKR(payable));
+      setClientCard('month',   'Profit',     formatPKR(profit), profit > 0 ? 'success' : '');
+      setClientCard('pending', 'Payments',   String(count));
+    }
+
+    function setClientCard(key, label, value, tone) {
+      const card = document.querySelector('[data-card="' + key + '"]');
+      if (!card) return;
+      card.classList.remove('warn');
+      const l = card.querySelector('.summary-card-label');
+      if (l) l.textContent = label;
+      card.classList.remove('is-clickable');   // client cards aren't filters
+      const v = card.querySelector('.summary-card-value');
+      if (v) {
+        v.textContent = value;
+        v.classList.remove('coral');
+        v.style.color = tone === 'success' ? 'var(--success)' : '';
+      }
+    }
+
+    function syncDateRangeClear() {
+      const btn = document.getElementById('dateRangeClear');
+      if (btn) btn.hidden = !(activityFilters.fromDate || activityFilters.toDate);
+    }
+
+    // Re-render the client's money cards from cache (used when the date
+    // range or party rates change without a fresh fetch).
+    function refreshClientMoney() {
+      if (session && session.role === 'client' && dashboardCache.data) {
+        renderDashSummary(dashboardCache.data.allEntries || []);
       }
     }
 
@@ -3435,7 +3554,7 @@
         const j = await apiGet('dashboard');
         if (!j.ok) throw new Error(j.error || 'Dashboard error');
         dashboardCache.data = j;
-        renderSummary(summaryFromEntries(j.allEntries || []));
+        renderDashSummary(j.allEntries || []);
         renderActivity(j.allEntries || []);
         renderNotReceived(j.allEntries || []);
         renderStatements(j.months || []);
@@ -3558,6 +3677,11 @@
                   + '<path d="M1 1.5l5 5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
                   + '</svg>';
 
+      // For clients the top name is their party label; show the real sender
+      // (added by the admin on confirm) as a second line.
+      const senderSub = (session && session.role === 'client' && e.actualSenderName)
+        ? `<div class="recent-sub">from ${escapeHtml(e.actualSenderName)}</div>` : '';
+
       return ''
         + `<div class="recent-row" role="button" tabindex="0" data-row="${e.row}" aria-expanded="false">`
         +   '<div class="recent-row-top">'
@@ -3567,6 +3691,7 @@
         +       caret
         +     '</span>'
         +   '</div>'
+        +   senderSub
         +   (meta ? `<div class="recent-meta">${meta}</div>` : '')
         +   (tags ? `<div class="recent-tags">${tags}</div>` : '')
         +   `<div class="recent-detail">${detailGridHtml(e)}</div>`
@@ -3575,6 +3700,24 @@
 
     function detailGridHtml(e) {
       const actualFilled = (typeof e.actualUsdAmount === 'number');
+
+      // Client-only money block: Receivable / Payable / Profit + party rate.
+      let clientCells = '';
+      if (session && session.role === 'client') {
+        const rate = partyByName(e.clientName);
+        const rec = entryReceivable(e);
+        const pay = entryPayable(e);
+        const pr  = entryProfit(e);
+        const rateText = (rate && rate.roe > 0)
+          ? ('ROE ' + Number(rate.roe).toFixed(2) + (rate.feePct > 0 ? (' · ' + rate.feePct + '%') : ''))
+          : '';
+        clientCells =
+            cell_('You receive',  rec != null ? formatPKR(rec) : (e.roe ? '' : 'awaiting pricing'), 'mono success')
+          + cell_('You pay party', pay != null ? formatPKR(pay) : 'set party rate', 'mono coral')
+          + cell_('Your profit',   pr  != null ? formatPKR(pr)  : '', 'mono ' + (pr > 0 ? 'success' : ''))
+          + cell_('Party rate',    rateText, 'mono', /* full */ true);
+      }
+
       const cells = [
         cell_('Payment date',      e.paymentDate ? formatDate(e.paymentDate) : '', 'mono'),
         cell_('Logged on',         e.entryDate   ? formatDate(e.entryDate)   : '', 'mono'),
@@ -3603,7 +3746,7 @@
         '<div class="detail-cell full admin-only" style="margin-top:6px;">'
         + `<button type="button" class="btn btn-ghost edit-entry-btn" data-edit-row="${e.row}">`
         + 'Review / edit this entry</button></div>';
-      return `<div class="detail-grid">${cells.join('')}${adminEdit}</div>`;
+      return `<div class="detail-grid">${clientCells}${cells.join('')}${adminEdit}</div>`;
     }
 
     function cell_(label, value, valClass, full) {
@@ -3852,7 +3995,7 @@
 
     // ---------- Activity: Not Received box + chip filters / search / sort ----------
     let activityEntries = [];
-    const activityFilters = { status: 'all', account: '', party: '', search: '', sort: 'newest' };
+    const activityFilters = { status: 'all', account: '', party: '', search: '', sort: 'newest', fromDate: '', toDate: '' };
 
     // Each status chip is a predicate over one entry. "unpriced" surfaces
     // money that has arrived but has no ROE yet — those rows are otherwise
@@ -3969,14 +4112,16 @@
 
     function filtersActive() {
       const f = activityFilters;
-      return f.status !== 'all' || !!f.account || !!f.party || !!(f.search && f.search.trim());
+      return f.status !== 'all' || !!f.account || !!f.party || !!f.fromDate || !!f.toDate || !!(f.search && f.search.trim());
     }
 
     function applyActivityFilters() {
       const f = activityFilters;
       let items = activityBase().filter((e) => matchStatus(e, f.status));
-      if (f.party)   items = items.filter((e) => e.clientName === f.party);
-      if (f.account) items = items.filter((e) => e.account === f.account);
+      if (f.party)    items = items.filter((e) => e.clientName === f.party);
+      if (f.account)  items = items.filter((e) => e.account === f.account);
+      if (f.fromDate) items = items.filter((e) => e.paymentDate && e.paymentDate >= f.fromDate);
+      if (f.toDate)   items = items.filter((e) => e.paymentDate && e.paymentDate <= f.toDate);
       if (f.search && f.search.trim()) {
         const q = f.search.trim().toLowerCase();
         items = items.filter((e) => [e.clientName, e.account, e.actualSenderName, e.batchRef, e.loggedBy]
@@ -3990,7 +4135,43 @@
           : '<div class="recent-empty"><em>No payments yet.</em><br>Logged payments will show up here.</div>';
         return;
       }
-      renderRecent(items);
+      // Clients get a PayPal-style, date-grouped feed; admin keeps the flat list.
+      if (session && session.role === 'client') renderRecentGrouped(items);
+      else renderRecent(items);
+    }
+
+    // Group entries under date headers (Today / Yesterday / date), each with
+    // a running total — the PayPal-activity look for client users.
+    function renderRecentGrouped(items) {
+      const groups = {};
+      const order = [];
+      items.forEach((e) => {
+        const d = e.paymentDate || 'Undated';
+        if (!groups[d]) { groups[d] = []; order.push(d); }
+        groups[d].push(e);
+      });
+      recentList.innerHTML = order.map((d) => {
+        const label = (d === 'Undated') ? 'Undated' : formatDateHeader(d);
+        let sum = 0;
+        groups[d].forEach((e) => { const r = entryReceivable(e); if (r != null) sum += r; });
+        return ''
+          + '<div class="date-group">'
+          +   '<div class="date-group-head">'
+          +     `<span class="date-group-label">${escapeHtml(label)}</span>`
+          +     `<span class="date-group-sum">${formatPKR(sum)}</span>`
+          +   '</div>'
+          +   groups[d].map(recentRowHtml).join('')
+          + '</div>';
+      }).join('');
+    }
+
+    function formatDateHeader(dstr) {
+      const pad = (n) => String(n).padStart(2, '0');
+      const ymd = (dt) => dt.getFullYear() + '-' + pad(dt.getMonth() + 1) + '-' + pad(dt.getDate());
+      const now = new Date();
+      if (dstr === ymd(now)) return 'Today';
+      if (dstr === ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1))) return 'Yesterday';
+      return formatDate(dstr);
     }
 
     function updateFilterFoot(shown) {
@@ -4077,12 +4258,39 @@
         activityFilters.account = '';
         activityFilters.party = '';
         activityFilters.search = '';
+        activityFilters.fromDate = '';
+        activityFilters.toDate = '';
         if (search) search.value = '';
         if (searchClear) searchClear.style.display = 'none';
+        const fromEl = document.getElementById('fromDate');
+        const toEl   = document.getElementById('toDate');
+        if (fromEl) fromEl.value = '';
+        if (toEl) toEl.value = '';
+        syncDateRangeClear();
         renderStatusChips();
         renderPartyChips(activityEntries);
         renderAccountChips(activityEntries);
+        refreshClientMoney();
         applyActivityFilters();
+      });
+
+      // Date-range picker (client). Cards + list both react to the range.
+      const fromEl = document.getElementById('fromDate');
+      const toEl   = document.getElementById('toDate');
+      const dateClear = document.getElementById('dateRangeClear');
+      const onDateChange = () => {
+        activityFilters.fromDate = fromEl ? fromEl.value : '';
+        activityFilters.toDate   = toEl ? toEl.value : '';
+        syncDateRangeClear();
+        refreshClientMoney();
+        applyActivityFilters();
+      };
+      if (fromEl) fromEl.addEventListener('change', onDateChange);
+      if (toEl) toEl.addEventListener('change', onDateChange);
+      if (dateClear) dateClear.addEventListener('click', () => {
+        if (fromEl) fromEl.value = '';
+        if (toEl) toEl.value = '';
+        onDateChange();
       });
 
       // Summary cards double as shortcuts into the matching status filter.
@@ -4094,6 +4302,9 @@
         card.setAttribute('role', 'button');
         card.setAttribute('tabindex', '0');
         const go = () => {
+          // For clients these cards show money (Receivable/Payable/Profit),
+          // not filters — only admins use them as status shortcuts.
+          if (!session || session.role !== 'admin') return;
           activityFilters.status = cardFilters[key];
           renderStatusChips();
           applyActivityFilters();
@@ -4550,7 +4761,37 @@
     // ============================================================
     // PARTIES — per-client vendor list (dropdown + manage panel)
     // ============================================================
-    let myParties = [];   // the logged-in client's own parties
+    let myParties = [];   // the logged-in client's own parties: {name, roe, feePct}
+
+    // Look up a party's saved pay rate by name (case-insensitive).
+    function partyByName(name) {
+      const k = String(name || '').trim().toLowerCase();
+      if (!k) return null;
+      return myParties.find((p) => p.name.toLowerCase() === k) || null;
+    }
+
+    // ---- The client money engine: Receivable / Payable / Profit per entry ----
+    // Receivable = what the admin pays the client (Final PKR).
+    // Payable    = USD × party ROE − party fee%  (what the client owes the party).
+    // Profit     = Receivable − Payable (only when both are known).
+    function entryReceivable(e) {
+      return (typeof e.finalPKR === 'number') ? e.finalPKR : null;
+    }
+    function entryPayable(e) {
+      const rate = partyByName(e.clientName);
+      if (!rate || !(rate.roe > 0)) return null;
+      const usd = (typeof e.usdAmount === 'number') ? e.usdAmount : null;
+      if (usd == null) return null;
+      const gross = usd * rate.roe;
+      return round2(gross - gross * (Number(rate.feePct) || 0) / 100);
+    }
+    function entryProfit(e) {
+      const rec = entryReceivable(e);
+      const pay = entryPayable(e);
+      if (rec == null || pay == null) return null;
+      return round2(rec - pay);
+    }
+    function round2(n) { return Math.round(Number(n) * 100) / 100; }
 
     // ---- Client: load + render own parties ----
     async function loadPartiesForClient() {
@@ -4566,9 +4807,15 @@
       if (!sel) return;
       const prev = sel.value;
       sel.innerHTML = '<option value="">Log under my own name</option>'
-        + myParties.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
-      if (myParties.indexOf(prev) !== -1) sel.value = prev;
+        + myParties.map((p) => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join('');
+      if (partyByName(prev)) sel.value = prev;
       renderPartyManageList();
+      // Party rates changed → refresh any client money figures on screen.
+      if (session && session.role === 'client' && dashboardCache.data) {
+        const entries = dashboardCache.data.allEntries || [];
+        renderDashSummary(entries);
+        if (currentTab === 'activity') applyActivityFilters();
+      }
     }
 
     function renderPartyManageList() {
@@ -4578,11 +4825,22 @@
         list.innerHTML = '<span class="party-empty">No parties yet — add your first one above.</span>';
         return;
       }
-      list.innerHTML = myParties.map((p) =>
-        `<span class="party-pill">${escapeHtml(p)}`
-        + `<button type="button" class="party-pill-x" data-party="${escapeHtml(p)}" aria-label="Remove ${escapeHtml(p)}">&times;</button>`
-        + '</span>'
-      ).join('');
+      list.innerHTML = myParties.map((p) => {
+        const roe = p.roe > 0 ? p.roe : '';
+        const fee = p.feePct > 0 ? p.feePct : '';
+        return ''
+          + `<div class="party-item" data-name="${escapeHtml(p.name)}">`
+          +   '<div class="party-item-head">'
+          +     `<span class="party-item-name">${escapeHtml(p.name)}</span>`
+          +     `<button type="button" class="party-pill-x" data-remove="${escapeHtml(p.name)}" aria-label="Remove ${escapeHtml(p.name)}">&times;</button>`
+          +   '</div>'
+          +   '<div class="party-item-rates">'
+          +     `<label>ROE<input type="number" inputmode="decimal" step="0.01" min="0" class="party-roe" value="${roe}" placeholder="0"></label>`
+          +     `<label>Fee %<input type="number" inputmode="decimal" step="0.1" min="0" max="100" class="party-fee" value="${fee}" placeholder="0"></label>`
+          +     `<button type="button" class="btn btn-ghost party-save" data-save="${escapeHtml(p.name)}">Save</button>`
+          +   '</div>'
+          + '</div>';
+      }).join('');
     }
 
     async function addPartyClient(name) {
@@ -4594,7 +4852,18 @@
         myParties = r.parties || [];
         renderPartyDropdown();
         const sel = document.getElementById('vendorParty');
-        if (sel && myParties.indexOf(party) !== -1) sel.value = party;   // auto-select the new one
+        if (sel && partyByName(party)) sel.value = party;   // auto-select the new one
+      } catch (err) {
+        showError('Network error', err.message || 'Try again.');
+      }
+    }
+
+    async function setPartyRateClient(name, roe, feePct) {
+      try {
+        const r = await apiPost('parties.setRate', { party: name, payRoe: roe, payFeePct: feePct });
+        if (!r.ok) { showError("Couldn't save rate", r.error || 'Try again.'); return; }
+        myParties = r.parties || [];
+        renderPartyDropdown();
       } catch (err) {
         showError('Network error', err.message || 'Try again.');
       }
@@ -4635,8 +4904,17 @@
         if (ev.key === 'Enter') { ev.preventDefault(); submitAdd(); }
       });
       if (list) list.addEventListener('click', (ev) => {
-        const x = ev.target.closest('.party-pill-x');
-        if (x) removePartyClient(x.dataset.party || '');
+        const rm = ev.target.closest('.party-pill-x');
+        if (rm) { removePartyClient(rm.dataset.remove || ''); return; }
+        const save = ev.target.closest('.party-save');
+        if (save) {
+          const item = save.closest('.party-item');
+          if (!item) return;
+          const roe = item.querySelector('.party-roe').value;
+          const fee = item.querySelector('.party-fee').value;
+          save.disabled = true; save.textContent = 'Saving…';
+          setPartyRateClient(save.dataset.save || '', roe, fee);
+        }
       });
     })();
 
@@ -4650,7 +4928,7 @@
         const r = await apiGet('parties.list', { clientId: clientId });
         const parties = (r.ok && r.parties) ? r.parties : [];
         sel.innerHTML = '<option value="">— pick a saved party —</option>'
-          + parties.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
+          + parties.map((p) => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join('');
         field.style.display = parties.length ? '' : 'none';
       } catch (err) { field.style.display = 'none'; }
     }

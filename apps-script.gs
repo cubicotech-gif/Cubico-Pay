@@ -138,8 +138,9 @@ function doPost(e) {
 
     // Party management — a client manages their own list; an admin may
     // manage a given client's list by passing clientId. Allowed for both.
-    if (action === 'parties.add')    return handleAddParty_(data, session);
-    if (action === 'parties.remove') return handleRemoveParty_(data, session);
+    if (action === 'parties.add')     return handleAddParty_(data, session);
+    if (action === 'parties.remove')  return handleRemoveParty_(data, session);
+    if (action === 'parties.setRate') return handleSetPartyRate_(data, session);
 
     // ---- Admin-only ----
     if (session.role !== 'admin') return jsonResponse({ ok: false, error: 'Forbidden' });
@@ -378,22 +379,32 @@ function getPartiesSheet_() {
   let sheet = ss.getSheetByName(PARTIES_SHEET);
   if (!sheet) {
     sheet = ss.insertSheet(PARTIES_SHEET);
-    sheet.getRange(1, 1, 1, 4).setValues([['clientId', 'party', 'active', 'createdAt']]);
+    sheet.getRange(1, 1, 1, 6).setValues([
+      ['clientId', 'party', 'active', 'createdAt', 'payRoe', 'payFeePct']
+    ]);
     sheet.setFrozenRows(1);
     sheet.setColumnWidth(2, 260);
+  } else if (sheet.getMaxColumns() < 6 || !sheet.getRange(1, 5).getValue()) {
+    // Migrate an older 4-column Parties sheet: add the rate columns.
+    if (sheet.getMaxColumns() < 6) {
+      sheet.insertColumnsAfter(sheet.getMaxColumns(), 6 - sheet.getMaxColumns());
+    }
+    if (!sheet.getRange(1, 5).getValue()) sheet.getRange(1, 5).setValue('payRoe');
+    if (!sheet.getRange(1, 6).getValue()) sheet.getRange(1, 6).setValue('payFeePct');
   }
   return sheet;
 }
 
-// Active party names for one client, de-duplicated (case-insensitive) and
-// sorted alphabetically.
+// Active parties for one client, de-duplicated (case-insensitive) and
+// sorted alphabetically. Each party carries the client's pay rate:
+//   { name, roe, feePct }  — used to compute what the client owes the party.
 function listParties_(clientId) {
   const cid = String(clientId || '').trim();
   if (!cid) return [];
   const sheet = getPartiesSheet_();
   const last = sheet.getLastRow();
   if (last < 2) return [];
-  const values = sheet.getRange(2, 1, last - 1, 4).getValues();
+  const values = sheet.getRange(2, 1, last - 1, 6).getValues();
   const seen = {};
   const out = [];
   for (let i = 0; i < values.length; i++) {
@@ -401,10 +412,17 @@ function listParties_(clientId) {
     const party = String(r[1] || '').trim();
     if (String(r[0]).trim() === cid && toBool_(r[2]) && party) {
       const k = party.toLowerCase();
-      if (!seen[k]) { seen[k] = true; out.push(party); }
+      if (!seen[k]) {
+        seen[k] = true;
+        out.push({
+          name: party,
+          roe: Number(r[4]) || 0,
+          feePct: Number(r[5]) || 0
+        });
+      }
     }
   }
-  out.sort((a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0));
+  out.sort((a, b) => (a.name.toLowerCase() < b.name.toLowerCase() ? -1 : a.name.toLowerCase() > b.name.toLowerCase() ? 1 : 0));
   return out;
 }
 
@@ -436,7 +454,38 @@ function handleAddParty_(data, session) {
       }
     }
   }
-  sheet.appendRow([cid, party, true, new Date()]);
+  sheet.appendRow([cid, party, true, new Date(), '', '']);
+  return jsonResponse({ ok: true, parties: listParties_(cid) });
+}
+
+// Set (or create) a party's pay rate — the ROE and % the client uses to
+// compute what they owe that party.
+function handleSetPartyRate_(data, session) {
+  const cid = partyClientId_(data, session);
+  if (!cid) return jsonResponse({ ok: false, error: 'clientId required' });
+  const party = String(data.party || '').trim();
+  if (!party) return jsonResponse({ ok: false, error: 'Party name required' });
+
+  const roe = (data.payRoe === '' || data.payRoe == null) ? 0 : parseFloat(data.payRoe);
+  const feePct = (data.payFeePct === '' || data.payFeePct == null) ? 0 : parseFloat(data.payFeePct);
+  if (isNaN(roe) || roe < 0) return jsonResponse({ ok: false, error: 'Invalid ROE' });
+  if (isNaN(feePct) || feePct < 0 || feePct > 100) return jsonResponse({ ok: false, error: 'Fee % must be 0–100' });
+
+  const sheet = getPartiesSheet_();
+  const last = sheet.getLastRow();
+  if (last >= 2) {
+    const values = sheet.getRange(2, 1, last - 1, 2).getValues();
+    for (let i = 0; i < values.length; i++) {
+      if (String(values[i][0]).trim() === cid &&
+          String(values[i][1]).trim().toLowerCase() === party.toLowerCase()) {
+        sheet.getRange(i + 2, 3).setValue(true);       // ensure active
+        sheet.getRange(i + 2, 5).setValue(roe);
+        sheet.getRange(i + 2, 6).setValue(feePct);
+        return jsonResponse({ ok: true, parties: listParties_(cid) });
+      }
+    }
+  }
+  sheet.appendRow([cid, party, true, new Date(), roe, feePct]);   // create with rate
   return jsonResponse({ ok: true, parties: listParties_(cid) });
 }
 
