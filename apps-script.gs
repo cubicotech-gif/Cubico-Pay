@@ -36,6 +36,7 @@
 
 const SHEET_NAME      = 'Payments Log';
 const USERS_SHEET     = 'Users';
+const PARTIES_SHEET   = 'Parties';   // per-client vendor/party list
 const SESSION_PREFIX  = 'session_';
 const SESSION_TTL_MS  = 24 * 60 * 60 * 1000;   // 24h sliding expiry
 const LOGIN_MAX_FAILS = 5;
@@ -98,6 +99,15 @@ function doGet(e) {
       return jsonResponse({ ok: true, clients: listClients_() });
     }
 
+    // Party list for a client. Clients get their own; admin may pass a
+    // clientId to load a specific client's list (for logging on behalf).
+    if (action === 'parties.list') {
+      const cid = session.role === 'admin'
+        ? String((e.parameter && e.parameter.clientId) || '').trim()
+        : session.clientId;
+      return jsonResponse({ ok: true, parties: listParties_(cid) });
+    }
+
     return jsonResponse({ ok: false, error: 'Unknown action: ' + action });
   } catch (err) {
     return jsonResponse({ ok: false, error: 'Server error: ' + (err.message || String(err)) });
@@ -125,6 +135,11 @@ function doPost(e) {
     if (action === 'logout')        return handleLogout_(data.token);
     if (action === 'changePassword') return handleChangePassword_(data, session);
     if (action === 'logPayment')    return handleLogPayment_(data, session);
+
+    // Party management — a client manages their own list; an admin may
+    // manage a given client's list by passing clientId. Allowed for both.
+    if (action === 'parties.add')    return handleAddParty_(data, session);
+    if (action === 'parties.remove') return handleRemoveParty_(data, session);
 
     // ---- Admin-only ----
     if (session.role !== 'admin') return jsonResponse({ ok: false, error: 'Forbidden' });
@@ -348,6 +363,101 @@ function listClients_() {
   return listUsers_()
     .filter((u) => u.role === 'client' && u.active)
     .map((u) => ({ username: u.username, clientId: u.clientId }));
+}
+
+// ============================================
+// PARTIES TAB — per-client vendor list
+// ============================================
+// One row per party, per client: clientId | party | active | createdAt.
+// A client picks a party from this list when logging, instead of typing
+// the vendor name each time. Removing a party just flips active to false
+// so historical payments keep their vendor name.
+
+function getPartiesSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(PARTIES_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(PARTIES_SHEET);
+    sheet.getRange(1, 1, 1, 4).setValues([['clientId', 'party', 'active', 'createdAt']]);
+    sheet.setFrozenRows(1);
+    sheet.setColumnWidth(2, 260);
+  }
+  return sheet;
+}
+
+// Active party names for one client, de-duplicated (case-insensitive) and
+// sorted alphabetically.
+function listParties_(clientId) {
+  const cid = String(clientId || '').trim();
+  if (!cid) return [];
+  const sheet = getPartiesSheet_();
+  const last = sheet.getLastRow();
+  if (last < 2) return [];
+  const values = sheet.getRange(2, 1, last - 1, 4).getValues();
+  const seen = {};
+  const out = [];
+  for (let i = 0; i < values.length; i++) {
+    const r = values[i];
+    const party = String(r[1] || '').trim();
+    if (String(r[0]).trim() === cid && toBool_(r[2]) && party) {
+      const k = party.toLowerCase();
+      if (!seen[k]) { seen[k] = true; out.push(party); }
+    }
+  }
+  out.sort((a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0));
+  return out;
+}
+
+// Resolve which clientId a party action targets: admins act on the passed
+// clientId (logging on behalf), clients act on their own.
+function partyClientId_(data, session) {
+  return session.role === 'admin'
+    ? String(data.clientId || '').trim()
+    : session.clientId;
+}
+
+function handleAddParty_(data, session) {
+  const cid = partyClientId_(data, session);
+  if (!cid) return jsonResponse({ ok: false, error: 'clientId required' });
+  const party = String(data.party || '').trim();
+  if (!party) return jsonResponse({ ok: false, error: 'Party name required' });
+  if (party.length > 80) return jsonResponse({ ok: false, error: 'Party name too long (max 80)' });
+
+  const sheet = getPartiesSheet_();
+  const last = sheet.getLastRow();
+  if (last >= 2) {
+    const values = sheet.getRange(2, 1, last - 1, 2).getValues();
+    for (let i = 0; i < values.length; i++) {
+      if (String(values[i][0]).trim() === cid &&
+          String(values[i][1]).trim().toLowerCase() === party.toLowerCase()) {
+        // Already exists (maybe removed earlier) — just re-activate it.
+        sheet.getRange(i + 2, 3).setValue(true);
+        return jsonResponse({ ok: true, parties: listParties_(cid) });
+      }
+    }
+  }
+  sheet.appendRow([cid, party, true, new Date()]);
+  return jsonResponse({ ok: true, parties: listParties_(cid) });
+}
+
+function handleRemoveParty_(data, session) {
+  const cid = partyClientId_(data, session);
+  if (!cid) return jsonResponse({ ok: false, error: 'clientId required' });
+  const party = String(data.party || '').trim().toLowerCase();
+  if (!party) return jsonResponse({ ok: false, error: 'Party name required' });
+
+  const sheet = getPartiesSheet_();
+  const last = sheet.getLastRow();
+  if (last >= 2) {
+    const values = sheet.getRange(2, 1, last - 1, 2).getValues();
+    for (let i = 0; i < values.length; i++) {
+      if (String(values[i][0]).trim() === cid &&
+          String(values[i][1]).trim().toLowerCase() === party) {
+        sheet.getRange(i + 2, 3).setValue(false);   // hide, keep the row
+      }
+    }
+  }
+  return jsonResponse({ ok: true, parties: listParties_(cid) });
 }
 
 function handleAddUser_(data) {
@@ -824,7 +934,13 @@ function buildDashboard_(session) {
   for (const r of rows) {
     const roeSet   = isNumeric_(r.roe) && r.roe > 0;
     const isPaid   = r.paidStatus === 'Paid';
-    const isUnpaid = r.paidStatus === 'Unpaid';
+    // A row counts as unpaid unless it's explicitly marked Paid. Blank
+    // status is the default lifecycle state (still owed) — matches the
+    // row's "Unpaid" badge and the Statements outstanding-PKR logic.
+    const isUnpaid = !isPaid;
+    // USD currency check — amounts are recorded only (no conversion), so
+    // non-USD entries must NOT be summed into a USD total.
+    const isUSD    = !r.currency || String(r.currency).toUpperCase() === 'USD';
     const usdForBucket = isNumeric_(r.actualUsdAmount) ? r.actualUsdAmount : r.usdAmount;
 
     if (isUnpaid && roeSet && isNumeric_(r.finalPKR)) totalUnpaidPKR += r.finalPKR;
@@ -833,7 +949,10 @@ function buildDashboard_(session) {
 
     if (r.paymentDate instanceof Date) {
       const ym = Utilities.formatDate(r.paymentDate, tz, 'yyyy-MM');
-      if (ym === thisMonth && isNumeric_(usdForBucket)) {
+      // "This month USD" = money actually received this month: only
+      // Confirmed receipts, only USD entries (no Pending/Not Received
+      // claims, no foreign currencies polluting the figure).
+      if (ym === thisMonth && r.receipt === 'Confirmed' && isUSD && isNumeric_(usdForBucket)) {
         totalReceivedUSDThisMonth += usdForBucket;
       }
 

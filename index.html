@@ -1332,6 +1332,36 @@
     .summary-card.is-clickable { cursor: pointer; }
     .summary-card.is-clickable:active { transform: scale(0.98); }
 
+    /* ---- Party / vendor manager (Log form) ---- */
+    .link-btn {
+      border: none; background: transparent; color: var(--coral-deep);
+      font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 600;
+      cursor: pointer; padding: 0;
+    }
+    .party-manage {
+      margin-top: 10px; padding: 12px; border: 1px solid var(--border);
+      border-radius: 12px; background: var(--bg);
+    }
+    .party-add-row { display: flex; gap: 8px; }
+    .party-add-row .input { flex: 1 1 auto; }
+    .party-add-btn { flex: 0 0 auto; white-space: nowrap; }
+    .party-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+    .party-list:empty { display: none; }
+    .party-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 600; color: var(--navy);
+      background: var(--surface); border: 1px solid var(--border-strong);
+      border-radius: 999px; padding: 5px 6px 5px 12px;
+    }
+    .party-pill-x {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 18px; height: 18px; border: none; border-radius: 50%;
+      background: var(--border); color: var(--muted); font-size: 13px; line-height: 1;
+      cursor: pointer; padding: 0;
+    }
+    .party-pill-x:hover { background: var(--coral-soft); color: var(--coral-deep); }
+    .party-empty { font-size: 12px; color: var(--muted-soft); font-family: 'DM Sans', sans-serif; }
+
     /* ---- Screenshot upload ---- */
     .file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
     .file-drop {
@@ -1454,6 +1484,24 @@
       -webkit-tap-highlight-color: transparent;
     }
     .tab svg { display: block; }
+    .tab-badge {
+      position: absolute;
+      top: 6px;
+      right: 50%;
+      transform: translateX(18px);
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      border-radius: 999px;
+      background: var(--coral);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 16px;
+      text-align: center;
+      letter-spacing: 0;
+    }
+    .tab-badge[hidden] { display: none; }
     .tab[aria-selected="true"] { color: var(--navy); }
     .tab[aria-selected="true"]::after {
       content: '';
@@ -1959,10 +2007,21 @@
 
         <div class="field client-only">
           <div class="field-label">
-            <label for="vendorName">Vendor name</label>
-            <span class="hint">Optional</span>
+            <label for="vendorParty">Party / vendor</label>
+            <button type="button" class="link-btn" id="managePartiesBtn">Manage parties</button>
           </div>
-          <input type="text" id="vendorName" name="vendorName" class="input" placeholder="Leave blank to log under your own name" autocomplete="off" />
+          <div class="select-wrapper">
+            <select id="vendorParty" name="vendorParty" class="select">
+              <option value="">Log under my own name</option>
+            </select>
+          </div>
+          <div class="party-manage" id="partyManage" style="display:none;">
+            <div class="party-add-row">
+              <input type="text" id="partyAddInput" class="input" placeholder="New party name" maxlength="80" autocomplete="off" />
+              <button type="button" class="btn btn-ghost party-add-btn" id="partyAddBtn">Add</button>
+            </div>
+            <div class="party-list" id="partyList"></div>
+          </div>
         </div>
 
         <div class="field admin-only">
@@ -1977,6 +2036,16 @@
           </div>
           <div class="form-note" id="noClientsHint" style="display:none;margin-top:8px;">
             <strong>No client accounts yet.</strong> Add one in the Team tab first, then come back here to log on their behalf.
+          </div>
+        </div>
+
+        <div class="field admin-only" id="adminPartyField" style="display:none;">
+          <div class="field-label">
+            <label for="adminVendorParty">Saved party</label>
+            <span class="hint">Fills sender name</span>
+          </div>
+          <div class="select-wrapper">
+            <select id="adminVendorParty" name="adminVendorParty" class="select"></select>
           </div>
         </div>
 
@@ -2122,14 +2191,6 @@
         </div>
       </div>
 
-      <div class="recent-section" id="notReceivedSection" style="display:none;">
-        <div class="recent-section-header">
-          <span class="recent-section-title">Not received</span>
-          <span class="recent-section-title" id="notReceivedCount" style="color:var(--coral-deep);font-weight:500;"></span>
-        </div>
-        <div class="recent-list" id="notReceivedList"></div>
-      </div>
-
       <div class="recent-section">
         <div class="recent-section-header">
           <span class="recent-section-title">All payments</span>
@@ -2147,6 +2208,7 @@
             <button id="filterSearchClear" type="button" class="filter-search-clear" aria-label="Clear search">&times;</button>
           </div>
           <div class="chip-row" id="statusChips" aria-label="Filter by status"></div>
+          <div class="chip-row" id="partyChips" aria-label="Filter by party"></div>
           <div class="chip-row" id="accountChips" aria-label="Filter by account"></div>
           <div class="filter-foot">
             <span class="filter-count" id="filterCount"></span>
@@ -2187,6 +2249,32 @@
             <div class="recent-meta"><span class="skeleton">Account · date · status</span></div>
           </div>
         </div>
+      </div>
+
+    </section>
+
+    <!-- ============================================================
+         NOT RECEIVED VIEW — its own tab, off the Activity list
+         ============================================================ -->
+    <section class="view" id="notReceivedView" role="tabpanel" aria-labelledby="tabNotReceived">
+
+      <div class="title-block">
+        <div class="eyebrow">Not received</div>
+        <h1>Still <em>not received</em></h1>
+        <p class="subtitle">Payments marked "Not Received". Anything past 5 days is flagged so you can chase it.</p>
+      </div>
+
+      <div class="recent-section">
+        <div class="recent-section-header">
+          <span class="recent-section-title">Not received <span id="notReceivedCount" style="color:var(--coral-deep);font-weight:500;"></span></span>
+          <button class="refresh-btn" id="notReceivedRefreshBtn" type="button" aria-label="Refresh">
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+              <path d="M12.5 2v3.5H9M1.5 12V8.5H5M11.5 5A4.5 4.5 0 0 0 3.2 4M2.5 9A4.5 4.5 0 0 0 10.8 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+        <div class="recent-list" id="notReceivedList"></div>
       </div>
 
     </section>
@@ -2387,6 +2475,14 @@
         <path d="M8 12.5l2.5 2.5L16 9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <span>Payouts</span>
+    </button>
+    <button class="tab" id="tabNotReceived" type="button" role="tab" aria-selected="false" aria-controls="notReceivedView" data-tab="notreceived">
+      <span class="tab-badge" id="notReceivedBadge" hidden></span>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M12 7.5v5M12 16v.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
+      <span>Not recv</span>
     </button>
     <button class="tab admin-only" id="tabAdmin" type="button" role="tab" aria-selected="false" aria-controls="adminView" data-tab="admin">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -2832,11 +2928,12 @@
     const ACTIVE_TAB_KEY = 'cubico-pay-active-tab';
     const tabButtons = document.querySelectorAll('.tab');
     const views = {
-      log:        document.getElementById('logView'),
-      activity:   document.getElementById('activityView'),
-      statements: document.getElementById('statementsView'),
-      payouts:    document.getElementById('payoutsView'),
-      admin:      document.getElementById('adminView'),
+      log:         document.getElementById('logView'),
+      activity:    document.getElementById('activityView'),
+      notreceived: document.getElementById('notReceivedView'),
+      statements:  document.getElementById('statementsView'),
+      payouts:     document.getElementById('payoutsView'),
+      admin:       document.getElementById('adminView'),
     };
     let currentTab = 'log';
 
@@ -2851,8 +2948,9 @@
         btn.setAttribute('aria-selected', sel ? 'true' : 'false');
       });
       try { localStorage.setItem(ACTIVE_TAB_KEY, name); } catch (e) { /* private mode */ }
-      if (name === 'activity'   && typeof onShowActivity   === 'function') onShowActivity();
-      if (name === 'statements' && typeof onShowStatements === 'function') onShowStatements();
+      if (name === 'activity'    && typeof onShowActivity    === 'function') onShowActivity();
+      if (name === 'notreceived' && typeof onShowNotReceived === 'function') onShowNotReceived();
+      if (name === 'statements'  && typeof onShowStatements  === 'function') onShowStatements();
       if (name === 'payouts'    && typeof onShowPayouts    === 'function') onShowPayouts();
       if (name === 'admin'      && typeof onShowAdmin      === 'function') onShowAdmin();
     }
@@ -2937,8 +3035,8 @@
         payload.clientId   = picker.value;
         payload.clientName = cname;
       } else {
-        const vendor = document.getElementById('vendorName').value.trim();
-        if (vendor) payload.clientName = vendor;
+        const party = document.getElementById('vendorParty').value.trim();
+        if (party) payload.clientName = party;
       }
 
       window.lastSubmission = Object.assign({ clientName: payload.clientName || session.username }, payload);
@@ -2998,11 +3096,14 @@
       const acctSel = document.getElementById('account');
       if (acctSel) acctSel.dispatchEvent(new Event('change'));
       document.getElementById('paymentDate').value = `${yyyy}-${mm}-${dd}`;
-      // form.reset() also clears the optional Vendor field — make that
-      // explicit so it doesn't accidentally retain a value if a future
-      // change adds a default.
-      const vendorEl = document.getElementById('vendorName');
-      if (vendorEl) vendorEl.value = '';
+      // form.reset() also clears the party dropdown — make that explicit,
+      // and collapse the manage panel if it was left open.
+      const partyEl = document.getElementById('vendorParty');
+      if (partyEl) partyEl.value = '';
+      const partyPanel = document.getElementById('partyManage');
+      if (partyPanel) partyPanel.style.display = 'none';
+      const manageBtn = document.getElementById('managePartiesBtn');
+      if (manageBtn) manageBtn.textContent = 'Manage parties';
       // form.reset() restores the default-checked Pending radio; sync the
       // pill UI so its `active` class matches.
       pills.forEach((p) => {
@@ -3247,17 +3348,24 @@
     const recentList  = document.getElementById('recentList');
 
     refreshBtn.addEventListener('click', () => loadDashboard());
+    const notReceivedRefreshBtn = document.getElementById('notReceivedRefreshBtn');
+    if (notReceivedRefreshBtn) notReceivedRefreshBtn.addEventListener('click', () => loadDashboard());
 
     // Dashboard pre-fetch is deferred until we know the session is good —
     // see onAuthReady() at the bottom of this script.
 
-    // Click / keyboard to toggle a row's expanded detail.
-    recentList.addEventListener('click', (ev) => toggleRowFromEvent(ev));
-    recentList.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter' || ev.key === ' ') {
-        const row = ev.target.closest('.recent-row');
-        if (row) { ev.preventDefault(); toggleRow(row); }
-      }
+    // Click / keyboard to toggle a row's expanded detail — in both the
+    // Activity list and the Not Received list.
+    const notReceivedList = document.getElementById('notReceivedList');
+    [recentList, notReceivedList].forEach((listEl) => {
+      if (!listEl) return;
+      listEl.addEventListener('click', (ev) => toggleRowFromEvent(ev));
+      listEl.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          const row = ev.target.closest('.recent-row');
+          if (row) { ev.preventDefault(); toggleRow(row); }
+        }
+      });
     });
 
     function toggleRowFromEvent(ev) {
@@ -3275,6 +3383,15 @@
         const entries = dashboardCache.data.allEntries || [];
         renderSummary(summaryFromEntries(entries));
         renderActivity(entries);
+        renderNotReceived(entries);   // keep the bottom-tab badge fresh
+      } else {
+        loadDashboard();
+      }
+    }
+
+    function onShowNotReceived() {
+      if (dashboardCache.data) {
+        renderNotReceived(dashboardCache.data.allEntries || []);
       } else {
         loadDashboard();
       }
@@ -3298,7 +3415,13 @@
         if (e.receipt === 'Pending') pendingReceiptsCount += 1;
         const usd = (typeof e.actualUsdAmount === 'number') ? e.actualUsdAmount
                   : (typeof e.usdAmount === 'number') ? e.usdAmount : 0;
-        if (e.paymentDate && e.paymentDate.slice(0, 7) === ym) totalReceivedUSDThisMonth += usd;
+        // "This month USD" = money actually received this month: only
+        // Confirmed receipts and only USD entries (no Pending claims, no
+        // foreign currencies polluting the figure).
+        const isUSD = !e.currency || String(e.currency).toUpperCase() === 'USD';
+        if (e.paymentDate && e.paymentDate.slice(0, 7) === ym && e.receipt === 'Confirmed' && isUSD) {
+          totalReceivedUSDThisMonth += usd;
+        }
       });
       return { totalUnpaidPKR, totalReceivedUSDThisMonth, overdueCount, pendingReceiptsCount };
     }
@@ -3314,6 +3437,7 @@
         dashboardCache.data = j;
         renderSummary(summaryFromEntries(j.allEntries || []));
         renderActivity(j.allEntries || []);
+        renderNotReceived(j.allEntries || []);
         renderStatements(j.months || []);
         renderPayouts(j.payouts || []);
       } catch (err) {
@@ -3357,6 +3481,11 @@
       if (payouts) {
         payouts.classList.toggle('spinning', on);
         payouts.disabled = on;
+      }
+      const notRecv = document.getElementById('notReceivedRefreshBtn');
+      if (notRecv) {
+        notRecv.classList.toggle('spinning', on);
+        notRecv.disabled = on;
       }
     }
 
@@ -3723,7 +3852,7 @@
 
     // ---------- Activity: Not Received box + chip filters / search / sort ----------
     let activityEntries = [];
-    const activityFilters = { status: 'all', account: '', search: '', sort: 'newest' };
+    const activityFilters = { status: 'all', account: '', party: '', search: '', sort: 'newest' };
 
     // Each status chip is a predicate over one entry. "unpriced" surfaces
     // money that has arrived but has no ROE yet — those rows are otherwise
@@ -3754,8 +3883,8 @@
     function renderActivity(entries) {
       activityEntries = Array.isArray(entries) ? entries.slice() : [];
       renderStatusChips();
+      renderPartyChips(activityEntries);
       renderAccountChips(activityEntries);
-      renderNotReceived(activityEntries);
       applyActivityFilters();
     }
 
@@ -3766,22 +3895,28 @@
     }
 
     function renderNotReceived(alerts) {
-      const section = document.getElementById('notReceivedSection');
       const list    = document.getElementById('notReceivedList');
       const countEl = document.getElementById('notReceivedCount');
-      if (!section || !list) return;
-      const items = alerts
+      const badge   = document.getElementById('notReceivedBadge');
+      if (!list) return;
+      const items = (alerts || [])
         .filter((e) => e.receipt === 'Not Received')
         .sort((a, b) => (typeof b.daysSince === 'number' ? b.daysSince : 0)
                       - (typeof a.daysSince === 'number' ? a.daysSince : 0));
+      const stale = items.filter((e) => typeof e.daysSince === 'number' && e.daysSince > 5).length;
+
+      // Bottom-tab badge counts the entries past 5 days (what needs chasing).
+      if (badge) {
+        if (stale > 0) { badge.textContent = String(stale); badge.hidden = false; }
+        else { badge.hidden = true; }
+      }
+
       if (!items.length) {
-        section.style.display = 'none';
-        list.innerHTML = '';
+        if (countEl) countEl.textContent = '';
+        list.innerHTML = '<div class="recent-empty"><em>Nothing here.</em><br>No payments are marked "Not Received".</div>';
         return;
       }
-      section.style.display = '';
-      const stale = items.filter((e) => typeof e.daysSince === 'number' && e.daysSince > 5).length;
-      if (countEl) countEl.textContent = stale > 0 ? (stale + ' over 5 days') : (items.length + ' total');
+      if (countEl) countEl.textContent = stale > 0 ? ('· ' + stale + ' over 5 days') : ('· ' + items.length + ' total');
       list.innerHTML = items.map(recentRowHtml).join('');
     }
 
@@ -3802,6 +3937,22 @@
       }).join('');
     }
 
+    function renderPartyChips(entries) {
+      const wrap = document.getElementById('partyChips');
+      if (!wrap) return;
+      // Party filtering is meaningful for a client (their own vendors). For
+      // admin the sender-name space is huge, so free-text search covers it.
+      if (!session || session.role !== 'client') { wrap.innerHTML = ''; return; }
+      const present = Array.from(new Set(entries
+        .filter((e) => e.receipt !== 'Not Received')
+        .map((e) => e.clientName).filter(Boolean)));
+      if (present.length < 2) { wrap.innerHTML = ''; return; }
+      wrap.innerHTML = present.map((p) => {
+        const active = activityFilters.party === p ? ' active' : '';
+        return `<button type="button" class="fchip fchip-party${active}" data-party="${escapeHtml(p)}">${escapeHtml(p)}</button>`;
+      }).join('');
+    }
+
     function renderAccountChips(entries) {
       const wrap = document.getElementById('accountChips');
       if (!wrap) return;
@@ -3818,12 +3969,13 @@
 
     function filtersActive() {
       const f = activityFilters;
-      return f.status !== 'all' || !!f.account || !!(f.search && f.search.trim());
+      return f.status !== 'all' || !!f.account || !!f.party || !!(f.search && f.search.trim());
     }
 
     function applyActivityFilters() {
       const f = activityFilters;
       let items = activityBase().filter((e) => matchStatus(e, f.status));
+      if (f.party)   items = items.filter((e) => e.clientName === f.party);
       if (f.account) items = items.filter((e) => e.account === f.account);
       if (f.search && f.search.trim()) {
         const q = f.search.trim().toLowerCase();
@@ -3889,6 +4041,16 @@
         applyActivityFilters();
       });
 
+      const partyWrap = document.getElementById('partyChips');
+      if (partyWrap) partyWrap.addEventListener('click', (ev) => {
+        const btn = ev.target.closest('.fchip');
+        if (!btn) return;
+        const p = btn.dataset.party || '';
+        activityFilters.party = (activityFilters.party === p) ? '' : p;   // toggle
+        renderPartyChips(activityEntries);
+        applyActivityFilters();
+      });
+
       const search = document.getElementById('filterSearch');
       const searchClear = document.getElementById('filterSearchClear');
       if (search) search.addEventListener('input', () => {
@@ -3913,10 +4075,12 @@
       if (clearBtn) clearBtn.addEventListener('click', () => {
         activityFilters.status = 'all';
         activityFilters.account = '';
+        activityFilters.party = '';
         activityFilters.search = '';
         if (search) search.value = '';
         if (searchClear) searchClear.style.display = 'none';
         renderStatusChips();
+        renderPartyChips(activityEntries);
         renderAccountChips(activityEntries);
         applyActivityFilters();
       });
@@ -4380,7 +4544,124 @@
       if (uname && !clientNameInput.value.trim()) {
         clientNameInput.value = uname;
       }
+      loadPartiesForAdmin(cid);   // mirror the client's saved party list
     });
+
+    // ============================================================
+    // PARTIES — per-client vendor list (dropdown + manage panel)
+    // ============================================================
+    let myParties = [];   // the logged-in client's own parties
+
+    // ---- Client: load + render own parties ----
+    async function loadPartiesForClient() {
+      if (!session || session.role !== 'client') return;
+      try {
+        const r = await apiGet('parties.list');
+        if (r.ok) { myParties = r.parties || []; renderPartyDropdown(); }
+      } catch (err) { /* non-fatal */ }
+    }
+
+    function renderPartyDropdown() {
+      const sel = document.getElementById('vendorParty');
+      if (!sel) return;
+      const prev = sel.value;
+      sel.innerHTML = '<option value="">Log under my own name</option>'
+        + myParties.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
+      if (myParties.indexOf(prev) !== -1) sel.value = prev;
+      renderPartyManageList();
+    }
+
+    function renderPartyManageList() {
+      const list = document.getElementById('partyList');
+      if (!list) return;
+      if (!myParties.length) {
+        list.innerHTML = '<span class="party-empty">No parties yet — add your first one above.</span>';
+        return;
+      }
+      list.innerHTML = myParties.map((p) =>
+        `<span class="party-pill">${escapeHtml(p)}`
+        + `<button type="button" class="party-pill-x" data-party="${escapeHtml(p)}" aria-label="Remove ${escapeHtml(p)}">&times;</button>`
+        + '</span>'
+      ).join('');
+    }
+
+    async function addPartyClient(name) {
+      const party = String(name || '').trim();
+      if (!party) return;
+      try {
+        const r = await apiPost('parties.add', { party: party });
+        if (!r.ok) { showError("Couldn't add party", r.error || 'Try again.'); return; }
+        myParties = r.parties || [];
+        renderPartyDropdown();
+        const sel = document.getElementById('vendorParty');
+        if (sel && myParties.indexOf(party) !== -1) sel.value = party;   // auto-select the new one
+      } catch (err) {
+        showError('Network error', err.message || 'Try again.');
+      }
+    }
+
+    async function removePartyClient(name) {
+      try {
+        const r = await apiPost('parties.remove', { party: name });
+        if (!r.ok) { showError("Couldn't remove party", r.error || 'Try again.'); return; }
+        myParties = r.parties || [];
+        renderPartyDropdown();
+      } catch (err) {
+        showError('Network error', err.message || 'Try again.');
+      }
+    }
+
+    (function wirePartyControls() {
+      const manageBtn = document.getElementById('managePartiesBtn');
+      const panel     = document.getElementById('partyManage');
+      const addInput  = document.getElementById('partyAddInput');
+      const addBtn    = document.getElementById('partyAddBtn');
+      const list      = document.getElementById('partyList');
+      if (manageBtn && panel) manageBtn.addEventListener('click', () => {
+        const open = panel.style.display === 'none';
+        panel.style.display = open ? 'block' : 'none';
+        manageBtn.textContent = open ? 'Done' : 'Manage parties';
+        if (open) renderPartyManageList();
+      });
+      const submitAdd = () => {
+        if (!addInput) return;
+        const v = addInput.value.trim();
+        if (!v) return;
+        addInput.value = '';
+        addPartyClient(v);
+      };
+      if (addBtn) addBtn.addEventListener('click', submitAdd);
+      if (addInput) addInput.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') { ev.preventDefault(); submitAdd(); }
+      });
+      if (list) list.addEventListener('click', (ev) => {
+        const x = ev.target.closest('.party-pill-x');
+        if (x) removePartyClient(x.dataset.party || '');
+      });
+    })();
+
+    // ---- Admin: load a chosen client's parties into the mirror dropdown ----
+    async function loadPartiesForAdmin(clientId) {
+      const field = document.getElementById('adminPartyField');
+      const sel   = document.getElementById('adminVendorParty');
+      if (!field || !sel) return;
+      if (!clientId) { field.style.display = 'none'; sel.innerHTML = ''; return; }
+      try {
+        const r = await apiGet('parties.list', { clientId: clientId });
+        const parties = (r.ok && r.parties) ? r.parties : [];
+        sel.innerHTML = '<option value="">— pick a saved party —</option>'
+          + parties.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
+        field.style.display = parties.length ? '' : 'none';
+      } catch (err) { field.style.display = 'none'; }
+    }
+
+    (function wireAdminPartyPick() {
+      const sel = document.getElementById('adminVendorParty');
+      if (!sel) return;
+      sel.addEventListener('change', () => {
+        if (sel.value && clientNameInput) clientNameInput.value = sel.value;   // fill sender name
+      });
+    })();
 
     // ============================================================
     // BOOT — orchestrate auth check + per-role wiring
@@ -4390,10 +4671,11 @@
       applyRole(session.role);
       if (navigator.onLine) loadDashboard();
       if (session.role === 'admin') loadClientsForPicker();
+      if (session.role === 'client') loadPartiesForClient();
       // Restore saved tab now that we know the role.
       try {
         const saved = localStorage.getItem(ACTIVE_TAB_KEY);
-        const ok = saved === 'activity' || saved === 'statements' || saved === 'payouts'
+        const ok = saved === 'activity' || saved === 'notreceived' || saved === 'statements' || saved === 'payouts'
           || (saved === 'admin' && session.role === 'admin');
         if (ok) setTimeout(() => switchTab(saved), 0);
       } catch (e) { /* private mode */ }
