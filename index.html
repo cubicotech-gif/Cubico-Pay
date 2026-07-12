@@ -1275,6 +1275,63 @@
       display: none;
     }
 
+    /* ---- Chip filter bar (Activity) ---- */
+    .filter-bar-v2 { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+    .filter-search { position: relative; display: flex; align-items: center; }
+    .filter-search svg { position: absolute; left: 11px; width: 14px; height: 14px; color: var(--muted-soft); pointer-events: none; }
+    .filter-search input {
+      width: 100%; font-family: 'DM Sans', sans-serif; font-size: 13px; color: var(--navy);
+      background: var(--surface); border: 1px solid var(--border-strong); border-radius: 10px;
+      padding: 9px 30px 9px 32px; -webkit-appearance: none; appearance: none;
+    }
+    .filter-search input:focus { outline: none; border-color: var(--coral); }
+    .filter-search-clear {
+      position: absolute; right: 8px; display: none; border: none; background: transparent;
+      color: var(--muted-soft); font-size: 18px; line-height: 1; cursor: pointer; padding: 2px 6px;
+    }
+    .chip-row {
+      display: flex; flex-wrap: nowrap; gap: 7px; overflow-x: auto;
+      -webkit-overflow-scrolling: touch; padding-bottom: 2px; scrollbar-width: none;
+    }
+    .chip-row:empty { display: none; }
+    .chip-row::-webkit-scrollbar { display: none; }
+    .fchip {
+      flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px;
+      font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 600; color: var(--muted);
+      background: var(--surface); border: 1px solid var(--border-strong); border-radius: 999px;
+      padding: 6px 12px; cursor: pointer; white-space: nowrap; transition: all .12s ease;
+    }
+    .fchip:hover { border-color: var(--muted-soft); }
+    .fchip.active { background: var(--navy); border-color: var(--navy); color: #fff; }
+    .fchip-n {
+      display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px;
+      padding: 0 4px; border-radius: 999px; background: var(--border); color: var(--muted);
+      font-size: 10px; font-weight: 700;
+    }
+    .fchip.active .fchip-n { background: rgba(255,255,255,.22); color: #fff; }
+    .fchip-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .filter-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .filter-count { font-size: 11px; font-weight: 500; color: var(--muted-soft); font-family: 'DM Sans', sans-serif; }
+    .filter-foot-right { display: flex; align-items: center; gap: 8px; }
+    .filter-sort { position: relative; }
+    .filter-sort select {
+      -webkit-appearance: none; appearance: none; font-family: 'DM Sans', sans-serif; font-size: 12px;
+      font-weight: 600; color: var(--navy); background: var(--surface); border: 1px solid var(--border-strong);
+      border-radius: 999px; padding: 6px 26px 6px 12px; cursor: pointer;
+    }
+    .filter-sort select:focus { outline: none; border-color: var(--coral); }
+    .filter-sort::after {
+      content: ''; position: absolute; right: 11px; top: 50%; width: 6px; height: 6px;
+      border-right: 1.5px solid var(--muted-soft); border-bottom: 1.5px solid var(--muted-soft);
+      transform: translateY(-65%) rotate(45deg); pointer-events: none;
+    }
+    .filter-clear {
+      border: none; background: transparent; color: var(--coral-deep); font-family: 'DM Sans', sans-serif;
+      font-size: 12px; font-weight: 600; cursor: pointer; padding: 6px 4px;
+    }
+    .summary-card.is-clickable { cursor: pointer; }
+    .summary-card.is-clickable:active { transform: scale(0.98); }
+
     /* ---- Screenshot upload ---- */
     .file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
     .file-drop {
@@ -2042,8 +2099,8 @@
 
       <div class="title-block">
         <div class="eyebrow">Activity</div>
-        <h1>Needs <em>attention</em></h1>
-        <p class="subtitle">Every payment that still needs to be confirmed or paid out. Reconciled entries move to Statements.</p>
+        <h1>All <em>payments</em></h1>
+        <p class="subtitle">Every payment you've logged. Filter by status or account, search, and tap any row for its full detail.</p>
       </div>
 
       <div class="summary-grid" id="summaryGrid">
@@ -2075,7 +2132,7 @@
 
       <div class="recent-section">
         <div class="recent-section-header">
-          <span class="recent-section-title">Awaiting action</span>
+          <span class="recent-section-title">All payments</span>
           <button class="refresh-btn" id="refreshBtn" type="button" aria-label="Refresh">
             <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
               <path d="M12.5 2v3.5H9M1.5 12V8.5H5M11.5 5A4.5 4.5 0 0 0 3.2 4M2.5 9A4.5 4.5 0 0 0 10.8 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
@@ -2083,34 +2140,28 @@
             <span>Refresh</span>
           </button>
         </div>
-        <div class="filter-bar" id="activityFilterBar">
-          <div class="filter-control">
-            <select id="filterAccount" aria-label="Filter by account">
-              <option value="">All accounts</option>
-            </select>
+        <div class="filter-bar-v2" id="activityFilterBar">
+          <div class="filter-search">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <input id="filterSearch" type="search" placeholder="Search name, account, sender, batch…" autocomplete="off" enterkeyhint="search">
+            <button id="filterSearchClear" type="button" class="filter-search-clear" aria-label="Clear search">&times;</button>
           </div>
-          <div class="filter-control">
-            <select id="filterReceipt" aria-label="Filter by receipt">
-              <option value="">All receipts</option>
-              <option value="Confirmed">Confirmed</option>
-              <option value="Pending">Pending</option>
-            </select>
-          </div>
-          <div class="filter-control">
-            <select id="filterPaid" aria-label="Filter by paid status">
-              <option value="">Paid &amp; unpaid</option>
-              <option value="Unpaid">Unpaid</option>
-              <option value="Paid">Paid</option>
-            </select>
-          </div>
-          <div class="filter-control">
-            <select id="sortBy" aria-label="Sort">
-              <option value="newest">Newest first</option>
-              <option value="oldest">Oldest first</option>
-              <option value="amount-desc">Amount: high → low</option>
-              <option value="amount-asc">Amount: low → high</option>
-              <option value="days-desc">Days waiting: most</option>
-            </select>
+          <div class="chip-row" id="statusChips" aria-label="Filter by status"></div>
+          <div class="chip-row" id="accountChips" aria-label="Filter by account"></div>
+          <div class="filter-foot">
+            <span class="filter-count" id="filterCount"></span>
+            <div class="filter-foot-right">
+              <div class="filter-sort">
+                <select id="sortBy" aria-label="Sort">
+                  <option value="newest">Newest first</option>
+                  <option value="oldest">Oldest first</option>
+                  <option value="amount-desc">Amount: high → low</option>
+                  <option value="amount-asc">Amount: low → high</option>
+                  <option value="days-desc">Days waiting: most</option>
+                </select>
+              </div>
+              <button class="filter-clear" id="filterClear" type="button" hidden>Clear all</button>
+            </div>
           </div>
         </div>
         <div class="recent-list" id="recentList">
@@ -3221,11 +3272,35 @@
 
     function onShowActivity() {
       if (dashboardCache.data) {
-        renderSummary(dashboardCache.data.summary);
-        renderRecent(dashboardCache.data.alerts || []);
+        const entries = dashboardCache.data.allEntries || [];
+        renderSummary(summaryFromEntries(entries));
+        renderActivity(entries);
       } else {
         loadDashboard();
       }
+    }
+
+    // Recompute the KPI cards from the full entry list so the cards always
+    // agree with what the list shows. The old backend summary silently
+    // dropped any row without an ROE from the unpaid/overdue counts, which
+    // is what made the totals look wrong. Overdue is time-based here, so an
+    // unpaid-but-unpriced row is still counted as overdue.
+    function summaryFromEntries(entries) {
+      const now = new Date();
+      const ym = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+      let totalUnpaidPKR = 0, totalReceivedUSDThisMonth = 0, overdueCount = 0, pendingReceiptsCount = 0;
+      // "Not Received" payments never arrived — they live in their own box and
+      // must not inflate the payout metrics (overdue / unpaid / received).
+      (entries || []).filter((e) => e.receipt !== 'Not Received').forEach((e) => {
+        const unpaid = (e.paidStatus || 'Unpaid') !== 'Paid';
+        if (unpaid && typeof e.finalPKR === 'number') totalUnpaidPKR += e.finalPKR;
+        if (unpaid && typeof e.daysSince === 'number' && e.daysSince > 10) overdueCount += 1;
+        if (e.receipt === 'Pending') pendingReceiptsCount += 1;
+        const usd = (typeof e.actualUsdAmount === 'number') ? e.actualUsdAmount
+                  : (typeof e.usdAmount === 'number') ? e.usdAmount : 0;
+        if (e.paymentDate && e.paymentDate.slice(0, 7) === ym) totalReceivedUSDThisMonth += usd;
+      });
+      return { totalUnpaidPKR, totalReceivedUSDThisMonth, overdueCount, pendingReceiptsCount };
     }
 
     async function loadDashboard() {
@@ -3237,8 +3312,8 @@
         const j = await apiGet('dashboard');
         if (!j.ok) throw new Error(j.error || 'Dashboard error');
         dashboardCache.data = j;
-        renderSummary(j.summary);
-        renderActivity(j.alerts || []);
+        renderSummary(summaryFromEntries(j.allEntries || []));
+        renderActivity(j.allEntries || []);
         renderStatements(j.months || []);
         renderPayouts(j.payouts || []);
       } catch (err) {
@@ -3318,7 +3393,7 @@
     function renderRecent(entries) {
       if (!entries || entries.length === 0) {
         recentList.innerHTML =
-          '<div class="recent-empty"><em>All caught up.</em><br>Every logged payment is confirmed and paid.</div>';
+          '<div class="recent-empty"><em>No payments to show.</em></div>';
         return;
       }
       recentList.innerHTML = entries.map(recentRowHtml).join('');
@@ -3646,15 +3721,48 @@
       });
     }
 
-    // ---------- Activity: Not Received box + filter / sort ----------
-    let activityAlerts = [];
-    const activityFilters = { account: '', receipt: '', paid: '', sort: 'newest' };
+    // ---------- Activity: Not Received box + chip filters / search / sort ----------
+    let activityEntries = [];
+    const activityFilters = { status: 'all', account: '', search: '', sort: 'newest' };
 
-    function renderActivity(alerts) {
-      activityAlerts = Array.isArray(alerts) ? alerts.slice() : [];
-      populateAccountFilter(activityAlerts);
-      renderNotReceived(activityAlerts);
+    // Each status chip is a predicate over one entry. "unpriced" surfaces
+    // money that has arrived but has no ROE yet — those rows are otherwise
+    // invisible in the PKR totals, which is what made the numbers look wrong.
+    const STATUS_DEFS = [
+      { key: 'all',       label: 'All' },
+      { key: 'pending',   label: 'Pending' },
+      { key: 'confirmed', label: 'Confirmed' },
+      { key: 'unpaid',    label: 'Unpaid' },
+      { key: 'paid',      label: 'Paid' },
+      { key: 'overdue',   label: 'Overdue' },
+      { key: 'unpriced',  label: 'Needs pricing' },
+    ];
+    function matchStatus(e, key) {
+      const unpaid = (e.paidStatus || 'Unpaid') !== 'Paid';
+      const priced = (typeof e.roe === 'number' && e.roe > 0);
+      switch (key) {
+        case 'pending':   return e.receipt === 'Pending';
+        case 'confirmed': return e.receipt === 'Confirmed';
+        case 'unpaid':    return unpaid;
+        case 'paid':      return e.paidStatus === 'Paid';
+        case 'overdue':   return unpaid && typeof e.daysSince === 'number' && e.daysSince > 10;
+        case 'unpriced':  return unpaid && !priced;
+        default:          return true;
+      }
+    }
+
+    function renderActivity(entries) {
+      activityEntries = Array.isArray(entries) ? entries.slice() : [];
+      renderStatusChips();
+      renderAccountChips(activityEntries);
+      renderNotReceived(activityEntries);
       applyActivityFilters();
+    }
+
+    // Not Received entries live in their own box, so every other view of the
+    // activity list works off this base (all logged payments minus those).
+    function activityBase() {
+      return activityEntries.filter((e) => e.receipt !== 'Not Received');
     }
 
     function renderNotReceived(alerts) {
@@ -3677,30 +3785,72 @@
       list.innerHTML = items.map(recentRowHtml).join('');
     }
 
-    function populateAccountFilter(alerts) {
-      const sel = document.getElementById('filterAccount');
-      if (!sel) return;
-      const present = Array.from(new Set(alerts.map((e) => e.account).filter(Boolean)));
-      const current = sel.value;
-      sel.innerHTML = '<option value="">All accounts</option>'
-        + present.map((a) => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join('');
-      if (present.indexOf(current) !== -1) sel.value = current;
+    function renderStatusChips() {
+      const wrap = document.getElementById('statusChips');
+      if (!wrap) return;
+      const base = activityBase();
+      wrap.innerHTML = STATUS_DEFS.map((d) => {
+        const n = d.key === 'all' ? base.length : base.filter((e) => matchStatus(e, d.key)).length;
+        const active = activityFilters.status === d.key ? ' active' : '';
+        const badge = (d.key !== 'all' && n > 0) ? `<span class="fchip-n">${n}</span>` : '';
+        // Hide a chip that would match nothing — except the always-useful
+        // Unpaid/Paid pair and whichever chip is currently active.
+        const keep = d.key === 'all' || d.key === 'unpaid' || d.key === 'paid'
+                  || activityFilters.status === d.key || n > 0;
+        const hide = keep ? '' : ' style="display:none;"';
+        return `<button type="button" class="fchip${active}" data-status="${d.key}"${hide}>${escapeHtml(d.label)}${badge}</button>`;
+      }).join('');
+    }
+
+    function renderAccountChips(entries) {
+      const wrap = document.getElementById('accountChips');
+      if (!wrap) return;
+      const present = Array.from(new Set(entries
+        .filter((e) => e.receipt !== 'Not Received')
+        .map((e) => e.account).filter(Boolean)));
+      if (present.length < 2) { wrap.innerHTML = ''; return; }   // nothing worth filtering
+      wrap.innerHTML = present.map((a) => {
+        const active = activityFilters.account === a ? ' active' : '';
+        const dot = `<span class="fchip-dot" style="background:${accountColor(a)};"></span>`;
+        return `<button type="button" class="fchip fchip-acct${active}" data-account="${escapeHtml(a)}">${dot}${escapeHtml(a)}</button>`;
+      }).join('');
+    }
+
+    function filtersActive() {
+      const f = activityFilters;
+      return f.status !== 'all' || !!f.account || !!(f.search && f.search.trim());
     }
 
     function applyActivityFilters() {
-      // Not Received entries live in their own box, so keep them out here.
-      let items = activityAlerts.filter((e) => e.receipt !== 'Not Received');
-      if (activityFilters.account) items = items.filter((e) => e.account === activityFilters.account);
-      if (activityFilters.receipt) items = items.filter((e) => e.receipt === activityFilters.receipt);
-      if (activityFilters.paid)    items = items.filter((e) => (e.paidStatus || 'Unpaid') === activityFilters.paid);
-      items = sortActivity(items, activityFilters.sort);
-      const filtered = activityFilters.account || activityFilters.receipt || activityFilters.paid;
-      if (!items.length && filtered) {
-        recentList.innerHTML =
-          '<div class="recent-empty"><em>No matching entries.</em><br>Try clearing a filter.</div>';
+      const f = activityFilters;
+      let items = activityBase().filter((e) => matchStatus(e, f.status));
+      if (f.account) items = items.filter((e) => e.account === f.account);
+      if (f.search && f.search.trim()) {
+        const q = f.search.trim().toLowerCase();
+        items = items.filter((e) => [e.clientName, e.account, e.actualSenderName, e.batchRef, e.loggedBy]
+          .some((v) => String(v || '').toLowerCase().indexOf(q) !== -1));
+      }
+      items = sortActivity(items, f.sort);
+      updateFilterFoot(items.length);
+      if (!items.length) {
+        recentList.innerHTML = filtersActive()
+          ? '<div class="recent-empty"><em>No matching payments.</em><br>Adjust or clear the filters.</div>'
+          : '<div class="recent-empty"><em>No payments yet.</em><br>Logged payments will show up here.</div>';
         return;
       }
       renderRecent(items);
+    }
+
+    function updateFilterFoot(shown) {
+      const total = activityBase().length;
+      const countEl = document.getElementById('filterCount');
+      const clearEl = document.getElementById('filterClear');
+      if (countEl) {
+        countEl.textContent = filtersActive()
+          ? (shown + ' of ' + total + ' payments')
+          : (total + ' payment' + (total === 1 ? '' : 's'));
+      }
+      if (clearEl) clearEl.hidden = !filtersActive();
     }
 
     function sortActivity(items, mode) {
@@ -3720,18 +3870,75 @@
     }
 
     (function wireActivityControls() {
-      const map = {
-        filterAccount: 'account',
-        filterReceipt: 'receipt',
-        filterPaid:    'paid',
-        sortBy:        'sort'
-      };
-      Object.keys(map).forEach((id) => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.addEventListener('change', () => {
-          activityFilters[map[id]] = el.value;
+      const statusWrap = document.getElementById('statusChips');
+      if (statusWrap) statusWrap.addEventListener('click', (ev) => {
+        const btn = ev.target.closest('.fchip');
+        if (!btn) return;
+        activityFilters.status = btn.dataset.status || 'all';
+        renderStatusChips();
+        applyActivityFilters();
+      });
+
+      const acctWrap = document.getElementById('accountChips');
+      if (acctWrap) acctWrap.addEventListener('click', (ev) => {
+        const btn = ev.target.closest('.fchip');
+        if (!btn) return;
+        const a = btn.dataset.account || '';
+        activityFilters.account = (activityFilters.account === a) ? '' : a;   // toggle
+        renderAccountChips(activityEntries);
+        applyActivityFilters();
+      });
+
+      const search = document.getElementById('filterSearch');
+      const searchClear = document.getElementById('filterSearchClear');
+      if (search) search.addEventListener('input', () => {
+        activityFilters.search = search.value;
+        if (searchClear) searchClear.style.display = search.value ? 'block' : 'none';
+        applyActivityFilters();
+      });
+      if (searchClear) searchClear.addEventListener('click', () => {
+        if (search) { search.value = ''; search.focus(); }
+        activityFilters.search = '';
+        searchClear.style.display = 'none';
+        applyActivityFilters();
+      });
+
+      const sortSel = document.getElementById('sortBy');
+      if (sortSel) sortSel.addEventListener('change', () => {
+        activityFilters.sort = sortSel.value;
+        applyActivityFilters();
+      });
+
+      const clearBtn = document.getElementById('filterClear');
+      if (clearBtn) clearBtn.addEventListener('click', () => {
+        activityFilters.status = 'all';
+        activityFilters.account = '';
+        activityFilters.search = '';
+        if (search) search.value = '';
+        if (searchClear) searchClear.style.display = 'none';
+        renderStatusChips();
+        renderAccountChips(activityEntries);
+        applyActivityFilters();
+      });
+
+      // Summary cards double as shortcuts into the matching status filter.
+      const cardFilters = { unpaid: 'unpaid', overdue: 'overdue', pending: 'pending' };
+      Object.keys(cardFilters).forEach((key) => {
+        const card = document.querySelector('[data-card="' + key + '"]');
+        if (!card) return;
+        card.classList.add('is-clickable');
+        card.setAttribute('role', 'button');
+        card.setAttribute('tabindex', '0');
+        const go = () => {
+          activityFilters.status = cardFilters[key];
+          renderStatusChips();
           applyActivityFilters();
+          const bar = document.getElementById('activityFilterBar');
+          if (bar) bar.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        };
+        card.addEventListener('click', go);
+        card.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); go(); }
         });
       });
     })();
