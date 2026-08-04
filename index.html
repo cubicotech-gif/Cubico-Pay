@@ -1906,6 +1906,120 @@
       .auth-card { padding: 28px 22px 24px; }
       .tabbar .tab span { font-size: 10px; }
     }
+
+    /* ============================================================
+       LEDGER — group-by + density controls, multi-select, subtotals
+       ============================================================ */
+    .ledger-controls { display: flex; flex-direction: column; gap: 8px; }
+    .ledger-ctl { display: flex; align-items: center; gap: 10px; }
+    .ledger-ctl-label {
+      font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase;
+      color: var(--muted-soft); font-weight: 600; width: 56px; flex: 0 0 auto;
+    }
+    .ledger-seg {
+      display: flex; flex: 1; gap: 2px; padding: 3px; overflow-x: auto;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 11px;
+      -ms-overflow-style: none; scrollbar-width: none;
+    }
+    .ledger-seg::-webkit-scrollbar { display: none; }
+    .ledger-seg button {
+      flex: 1; white-space: nowrap; border: 0; background: transparent; cursor: pointer;
+      font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--muted);
+      padding: 7px 10px; border-radius: 8px; transition: background 0.15s ease, color 0.15s ease;
+    }
+    .ledger-seg button.on { background: var(--surface); color: var(--navy); box-shadow: var(--shadow-sm); }
+    .ledger-seg.accent button.on { background: var(--coral); color: #fff; box-shadow: none; }
+
+    /* select circle — shared by rows and group headers */
+    .sel-box {
+      width: 20px; height: 20px; border-radius: 50%; flex: 0 0 auto; cursor: pointer;
+      border: 1.6px solid var(--border-strong); background: var(--surface);
+      position: relative; transition: background 0.14s ease, border-color 0.14s ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .sel-box:hover { border-color: var(--coral); }
+    .sel-box:focus-visible { outline: 2px solid var(--coral); outline-offset: 2px; }
+    .sel-box.on { background: var(--coral); border-color: var(--coral); }
+    .sel-box.on::after {
+      content: ""; position: absolute; left: 6px; top: 2.5px; width: 5px; height: 9px;
+      border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg);
+    }
+    .sel-box.mixed { border-color: var(--coral); }
+    .sel-box.mixed::after {
+      content: ""; position: absolute; left: 4px; top: 8px; width: 10px; height: 2px;
+      background: var(--coral); border-radius: 2px;
+    }
+
+    /* a row wrapped with its select circle */
+    .ledger-item { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+    .ledger-item .recent-row { flex: 1; min-width: 0; margin-bottom: 0; }
+    .ledger-item > .sel-box { margin-top: 15px; }
+    .ledger-item.sel .recent-row { border-color: var(--coral); box-shadow: 0 0 0 1px var(--coral) inset, var(--shadow-sm); }
+
+    /* group card */
+    .ledger-group { margin-bottom: 14px; }
+    .ledger-group .rows { margin-top: 8px; }
+    .ledger-group.collapsed .rows { display: none; }
+    .lg-head {
+      display: flex; align-items: center; gap: 11px; cursor: pointer;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+      padding: 10px 13px; box-shadow: var(--shadow-sm); transition: border-color 0.15s ease;
+    }
+    .lg-head:hover { border-color: var(--border-strong); }
+    .lg-title { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+    .lg-name {
+      font-family: 'Fraunces', serif; font-weight: 600; font-size: 15px; color: var(--navy);
+      letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .lg-count { font-size: 11.5px; color: var(--muted); }
+    .lg-tot { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex: 0 0 auto; }
+    .lg-usd { font-family: 'JetBrains Mono', monospace; font-weight: 600; font-size: 14px; color: var(--navy); }
+    .lg-pkr { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--muted); }
+    .lg-caret { width: 14px; height: 14px; color: var(--muted-soft); transition: transform 0.2s ease; flex: 0 0 auto; }
+    .ledger-group.collapsed .lg-caret { transform: rotate(-90deg); }
+
+    /* compact density — scoped to the Activity list so Statements/Payouts/
+       Not-Received rows are untouched */
+    .recent-mini { display: none; align-items: center; gap: 7px; margin-top: 4px; }
+    .recent-mini-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+    .recent-mini-text { font-size: 11.5px; color: var(--muted); }
+    #recentList.compact .recent-row { padding: 9px 13px; }
+    #recentList.compact .recent-row-top { margin-bottom: 0; }
+    #recentList.compact .recent-meta,
+    #recentList.compact .recent-tags { display: none; }
+    #recentList.compact .recent-mini { display: flex; }
+    #recentList.compact .recent-row.open .recent-meta,
+    #recentList.compact .recent-row.open .recent-tags { display: flex; }
+    #recentList.compact .recent-row.open .recent-mini { display: none; }
+    #recentList.compact .ledger-item { margin-bottom: 5px; }
+    #recentList.compact .ledger-item > .sel-box { margin-top: 9px; }
+
+    /* selection sum bar */
+    .ledger-sumbar {
+      position: fixed; left: 0; right: 0; z-index: 45;
+      bottom: calc(58px + env(safe-area-inset-bottom));
+      padding: 0 14px; pointer-events: none;
+      transform: translateY(140%); opacity: 0;
+      transition: transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.2s ease;
+    }
+    .ledger-sumbar.show { transform: translateY(0); opacity: 1; pointer-events: auto; }
+    .ledger-sumbar-card {
+      max-width: 520px; margin: 0 auto; display: flex; align-items: center; gap: 14px;
+      background: var(--navy); color: #fff; border-radius: 14px; padding: 12px 14px;
+      box-shadow: var(--shadow-lg);
+    }
+    .ledger-sum-left { flex: 1; min-width: 0; }
+    .ledger-sum-count { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255,255,255,0.65); font-weight: 700; }
+    .ledger-sum-nums { display: flex; align-items: baseline; gap: 12px; margin-top: 3px; flex-wrap: wrap; }
+    .ledger-sum-usd { font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+    .ledger-sum-pkr { font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: rgba(255,255,255,0.7); }
+    .ledger-sum-fx { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #FFC7A8; }
+    .ledger-sum-clear {
+      flex: 0 0 auto; background: var(--coral); color: #fff; border: 0; cursor: pointer;
+      font-family: inherit; font-weight: 700; font-size: 13px; padding: 10px 15px; border-radius: 10px;
+    }
+    .ledger-sum-clear:hover { background: var(--coral-deep); }
+    @media (prefers-reduced-motion: reduce) { .ledger-sumbar { transition: opacity 0.2s ease; } }
   </style>
 </head>
 <body class="auth-mode">
@@ -2207,6 +2321,25 @@
             <input id="filterSearch" type="search" placeholder="Search name, account, sender, batch…" autocomplete="off" enterkeyhint="search">
             <button id="filterSearchClear" type="button" class="filter-search-clear" aria-label="Clear search">&times;</button>
           </div>
+          <div class="ledger-controls">
+            <div class="ledger-ctl">
+              <span class="ledger-ctl-label">Group</span>
+              <div class="ledger-seg" id="groupSeg" role="tablist" aria-label="Group payments by">
+                <button type="button" data-group="none" class="on">None</button>
+                <button type="button" data-group="month">Month</button>
+                <button type="button" data-group="account">Account</button>
+                <button type="button" data-group="client">Client</button>
+                <button type="button" data-group="status">Status</button>
+              </div>
+            </div>
+            <div class="ledger-ctl">
+              <span class="ledger-ctl-label">Density</span>
+              <div class="ledger-seg accent" id="densitySeg" role="tablist" aria-label="Row density">
+                <button type="button" data-density="comfortable" class="on">Comfortable</button>
+                <button type="button" data-density="compact">Compact</button>
+              </div>
+            </div>
+          </div>
           <div class="chip-row" id="statusChips" aria-label="Filter by status"></div>
           <div class="chip-row" id="partyChips" aria-label="Filter by party"></div>
           <div class="chip-row" id="accountChips" aria-label="Filter by account"></div>
@@ -2494,6 +2627,24 @@
       <span>Team</span>
     </button>
   </nav>
+
+  <!-- ============================================================
+       LEDGER SELECTION SUM BAR — floats above the tab bar when one
+       or more Activity rows are selected. Sums USD + PKR (final) live.
+       ============================================================ -->
+  <div class="ledger-sumbar" id="ledgerSumbar" aria-live="polite">
+    <div class="ledger-sumbar-card">
+      <div class="ledger-sum-left">
+        <span class="ledger-sum-count" id="ledgerSumCount">0 selected</span>
+        <div class="ledger-sum-nums">
+          <span class="ledger-sum-usd" id="ledgerSumUsd">$0</span>
+          <span class="ledger-sum-pkr" id="ledgerSumPkr"></span>
+          <span class="ledger-sum-fx" id="ledgerSumFx"></span>
+        </div>
+      </div>
+      <button type="button" class="ledger-sum-clear" id="ledgerSumClear">Clear</button>
+    </div>
+  </div>
 
   <!-- ============================================================
        SUCCESS OVERLAY
@@ -2949,6 +3100,8 @@
       });
       try { localStorage.setItem(ACTIVE_TAB_KEY, name); } catch (e) { /* private mode */ }
       if (name === 'activity'    && typeof onShowActivity    === 'function') onShowActivity();
+      // Keep the selection sum bar tied to the Activity tab only.
+      if (typeof updateLedgerSumbar === 'function') updateLedgerSumbar();
       if (name === 'notreceived' && typeof onShowNotReceived === 'function') onShowNotReceived();
       if (name === 'statements'  && typeof onShowStatements  === 'function') onShowStatements();
       if (name === 'payouts'    && typeof onShowPayouts    === 'function') onShowPayouts();
@@ -3558,6 +3711,12 @@
                   + '<path d="M1 1.5l5 5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
                   + '</svg>';
 
+      // Compact-density one-liner: only rendered visible when the Activity
+      // list is in compact mode (CSS-gated). A status dot + account + age.
+      const miniBits = [e.account, dayText].filter(Boolean).join(' · ');
+      const mini = `<div class="recent-mini"><span class="recent-mini-dot" style="background:${statusDotColor(e)}"></span>`
+                 + `<span class="recent-mini-text">${escapeHtml(miniBits || (e.paidStatus || 'Unpaid'))}</span></div>`;
+
       return ''
         + `<div class="recent-row" role="button" tabindex="0" data-row="${e.row}" aria-expanded="false">`
         +   '<div class="recent-row-top">'
@@ -3567,10 +3726,21 @@
         +       caret
         +     '</span>'
         +   '</div>'
+        +   mini
         +   (meta ? `<div class="recent-meta">${meta}</div>` : '')
         +   (tags ? `<div class="recent-tags">${tags}</div>` : '')
         +   `<div class="recent-detail">${detailGridHtml(e)}</div>`
         + '</div>';
+    }
+
+    // Single colour that summarises an entry's state, used for the compact
+    // mini-line dot: red = not received, amber = pending, green = paid,
+    // navy-muted = confirmed-but-unpaid.
+    function statusDotColor(e) {
+      if (e.receipt === 'Not Received') return 'var(--coral)';
+      if (e.receipt === 'Pending')      return 'var(--warn)';
+      if (e.paidStatus === 'Paid')      return 'var(--success)';
+      return 'var(--muted-soft)';
     }
 
     function detailGridHtml(e) {
@@ -3852,7 +4022,13 @@
 
     // ---------- Activity: Not Received box + chip filters / search / sort ----------
     let activityEntries = [];
-    const activityFilters = { status: 'all', account: '', party: '', search: '', sort: 'newest' };
+    const activityFilters = { status: 'all', account: '', party: '', search: '', sort: 'newest', group: 'none', density: 'comfortable' };
+
+    // Ledger multi-select: set of selected row numbers, the entries currently
+    // shown (for group select-all), and which group keys are collapsed.
+    const activitySelection = new Set();
+    let activityShown = [];
+    const activityCollapsed = new Set();
 
     // Each status chip is a predicate over one entry. "unpriced" surfaces
     // money that has arrived but has no ROE yet — those rows are otherwise
@@ -3882,6 +4058,9 @@
 
     function renderActivity(entries) {
       activityEntries = Array.isArray(entries) ? entries.slice() : [];
+      // Drop any selected rows that no longer exist after a data refresh.
+      const liveRows = new Set(activityEntries.map((e) => e.row));
+      [...activitySelection].forEach((r) => { if (!liveRows.has(r)) activitySelection.delete(r); });
       renderStatusChips();
       renderPartyChips(activityEntries);
       renderAccountChips(activityEntries);
@@ -3985,12 +4164,177 @@
       items = sortActivity(items, f.sort);
       updateFilterFoot(items.length);
       if (!items.length) {
+        activityShown = [];
         recentList.innerHTML = filtersActive()
           ? '<div class="recent-empty"><em>No matching payments.</em><br>Adjust or clear the filters.</div>'
           : '<div class="recent-empty"><em>No payments yet.</em><br>Logged payments will show up here.</div>';
+        updateLedgerSumbar();
         return;
       }
-      renderRecent(items);
+      renderLedger(items);
+    }
+
+    // ============================================================
+    // LEDGER — grouped/flat render, multi-select, live subtotals
+    // ============================================================
+    function renderLedger(items) {
+      activityShown = items.slice();
+      recentList.classList.toggle('compact', activityFilters.density === 'compact');
+      if (activityFilters.group === 'none') {
+        recentList.innerHTML = items.map(ledgerItemHtml).join('');
+      } else {
+        recentList.innerHTML = buildLedgerGroups(items).map(ledgerGroupHtml).join('');
+      }
+      updateLedgerSumbar();
+    }
+
+    function ledgerItemHtml(e) {
+      const sel = activitySelection.has(e.row);
+      return `<div class="ledger-item${sel ? ' sel' : ''}" data-id="${e.row}">`
+        + `<span class="sel-box${sel ? ' on' : ''}" data-sel="${e.row}" role="checkbox" `
+        + `aria-checked="${sel ? 'true' : 'false'}" tabindex="0" aria-label="Select payment"></span>`
+        + recentRowHtml(e)
+        + '</div>';
+    }
+
+    const MONTH_NAMES = ['January','February','March','April','May','June',
+                         'July','August','September','October','November','December'];
+    function ledgerGroupKey(e) {
+      switch (activityFilters.group) {
+        case 'month':   return (e.paymentDate || '0000-00').slice(0, 7);
+        case 'account': return e.account || '—';
+        case 'client':  return e.clientName || '—';
+        case 'status':
+          if (e.receipt === 'Not Received') return 'Not Received';
+          if (e.receipt === 'Pending')      return 'Pending';
+          if (e.paidStatus === 'Paid')      return 'Paid';
+          return 'Confirmed · Unpaid';
+        default:        return '';
+      }
+    }
+    function ledgerGroupLabel(key) {
+      if (activityFilters.group !== 'month') return key;
+      const parts = key.split('-');
+      const mi = parseInt(parts[1], 10) - 1;
+      return (MONTH_NAMES[mi] || '?') + ' ' + parts[0];
+    }
+    function buildLedgerGroups(items) {
+      const map = new Map();
+      items.forEach((e) => {
+        const k = ledgerGroupKey(e);
+        if (!map.has(k)) map.set(k, { key: k, label: ledgerGroupLabel(k), items: [] });
+        map.get(k).items.push(e);
+      });
+      const groups = [...map.values()];
+      if (activityFilters.group === 'month') {
+        groups.sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0));
+      } else if (activityFilters.group === 'status') {
+        const order = ['Not Received', 'Pending', 'Confirmed · Unpaid', 'Paid'];
+        groups.sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
+      } else {
+        groups.sort((a, b) => ledgerSums(b.items).usd - ledgerSums(a.items).usd);
+      }
+      return groups;
+    }
+
+    // USD total counts USD-currency rows only (no conversion); other
+    // currencies are kept apart. PKR total sums the final PKR-to-pay.
+    function ledgerSums(entries) {
+      let usd = 0, pkr = 0; const fx = {};
+      entries.forEach((e) => {
+        const isUSD = !e.currency || String(e.currency).toUpperCase() === 'USD';
+        const amt = (typeof e.usdAmount === 'number') ? e.usdAmount : 0;
+        if (isUSD) usd += amt; else if (amt) fx[e.currency] = (fx[e.currency] || 0) + amt;
+        if (typeof e.finalPKR === 'number') pkr += e.finalPKR;
+      });
+      return { usd, pkr, fx };
+    }
+
+    function groupSelState(g) {
+      const n = g.items.filter((e) => activitySelection.has(e.row)).length;
+      return n === 0 ? 'none' : n === g.items.length ? 'all' : 'some';
+    }
+
+    function ledgerGroupHtml(g) {
+      const s = ledgerSums(g.items);
+      const st = groupSelState(g);
+      const collapsed = activityCollapsed.has(g.key);
+      const fxNote = Object.keys(s.fx).length
+        ? '<span class="lg-pkr">+ ' + Object.entries(s.fx).map(([c, v]) => formatMoney(v, c)).join(' · ') + '</span>'
+        : '';
+      return `<div class="ledger-group${collapsed ? ' collapsed' : ''}" data-gkey="${escapeHtml(g.key)}">`
+        + '<div class="lg-head">'
+        +   `<span class="sel-box lg-sel${st === 'all' ? ' on' : ''}${st === 'some' ? ' mixed' : ''}" `
+        +     `data-gsel="${escapeHtml(g.key)}" role="checkbox" aria-checked="${st === 'all' ? 'true' : 'false'}" `
+        +     'tabindex="0" aria-label="Select group"></span>'
+        +   '<div class="lg-title">'
+        +     `<span class="lg-name">${escapeHtml(g.label)}</span>`
+        +     `<span class="lg-count">${g.items.length} ${g.items.length === 1 ? 'payment' : 'payments'}</span>`
+        +   '</div>'
+        +   '<div class="lg-tot">'
+        +     `<span class="lg-usd">${formatUSD0(s.usd)}</span>`
+        +     (fxNote || `<span class="lg-pkr">${formatPKR(s.pkr)}</span>`)
+        +   '</div>'
+        +   '<svg class="lg-caret" viewBox="0 0 12 8" fill="none" aria-hidden="true"><path d="M1 1.5l5 5 5-5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+        + '</div>'
+        + `<div class="rows">${g.items.map(ledgerItemHtml).join('')}</div>`
+        + '</div>';
+    }
+
+    // ---- selection mutation (surgical DOM updates so expanded rows stay open) ----
+    function setRowSelectedDom(row, on) {
+      const item = recentList.querySelector('.ledger-item[data-id="' + row + '"]');
+      if (!item) return;
+      item.classList.toggle('sel', on);
+      const box = item.querySelector('.sel-box');
+      if (box) { box.classList.toggle('on', on); box.setAttribute('aria-checked', on ? 'true' : 'false'); }
+    }
+    function toggleRowSelection(row) {
+      const on = !activitySelection.has(row);
+      if (on) activitySelection.add(row); else activitySelection.delete(row);
+      setRowSelectedDom(row, on);
+      refreshGroupHeadStates();
+      updateLedgerSumbar();
+    }
+    function toggleGroupSelection(key) {
+      const items = activityShown.filter((e) => ledgerGroupKey(e) === key);
+      const allOn = items.length && items.every((e) => activitySelection.has(e.row));
+      items.forEach((e) => {
+        if (allOn) activitySelection.delete(e.row); else activitySelection.add(e.row);
+        setRowSelectedDom(e.row, !allOn);
+      });
+      refreshGroupHeadStates();
+      updateLedgerSumbar();
+    }
+    function refreshGroupHeadStates() {
+      recentList.querySelectorAll('.ledger-group').forEach((groupEl) => {
+        const key = groupEl.dataset.gkey;
+        const items = activityShown.filter((e) => ledgerGroupKey(e) === key);
+        const n = items.filter((e) => activitySelection.has(e.row)).length;
+        const st = n === 0 ? 'none' : n === items.length ? 'all' : 'some';
+        const box = groupEl.querySelector('.lg-sel');
+        if (!box) return;
+        box.classList.toggle('on', st === 'all');
+        box.classList.toggle('mixed', st === 'some');
+        box.setAttribute('aria-checked', st === 'all' ? 'true' : 'false');
+      });
+    }
+
+    function updateLedgerSumbar() {
+      const bar = document.getElementById('ledgerSumbar');
+      if (!bar) return;
+      const onActivity = !!(views.activity && views.activity.classList.contains('view-active'));
+      const sel = activityEntries.filter((e) => activitySelection.has(e.row));
+      if (!onActivity || !sel.length) { bar.classList.remove('show'); return; }
+      const s = ledgerSums(sel);
+      document.getElementById('ledgerSumCount').textContent =
+        sel.length + ' selected';
+      document.getElementById('ledgerSumUsd').textContent = formatUSD0(s.usd);
+      document.getElementById('ledgerSumPkr').textContent =
+        s.pkr > 0 ? formatPKR(s.pkr) + ' final' : '';
+      document.getElementById('ledgerSumFx').textContent =
+        Object.entries(s.fx).map(([c, v]) => '+ ' + formatMoney(v, c)).join('  ');
+      bar.classList.add('show');
     }
 
     function updateFilterFoot(shown) {
@@ -4104,6 +4448,61 @@
         card.addEventListener('keydown', (ev) => {
           if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); go(); }
         });
+      });
+    })();
+
+    // ---- Ledger controls: group-by, density, selection, sum bar ----
+    (function wireLedgerControls() {
+      const groupSeg = document.getElementById('groupSeg');
+      if (groupSeg) groupSeg.addEventListener('click', (ev) => {
+        const b = ev.target.closest('button'); if (!b) return;
+        activityFilters.group = b.dataset.group;
+        activityCollapsed.clear();
+        [...groupSeg.children].forEach((x) => x.classList.toggle('on', x === b));
+        applyActivityFilters();
+      });
+
+      const densitySeg = document.getElementById('densitySeg');
+      if (densitySeg) densitySeg.addEventListener('click', (ev) => {
+        const b = ev.target.closest('button'); if (!b) return;
+        activityFilters.density = b.dataset.density;
+        [...densitySeg.children].forEach((x) => x.classList.toggle('on', x === b));
+        applyActivityFilters();
+      });
+
+      const clearSum = document.getElementById('ledgerSumClear');
+      if (clearSum) clearSum.addEventListener('click', () => {
+        activitySelection.clear();
+        recentList.querySelectorAll('.ledger-item.sel').forEach((it) => setRowSelectedDom(it.dataset.id, false));
+        refreshGroupHeadStates();
+        updateLedgerSumbar();
+      });
+
+      // Selection + group collapse. Runs alongside the existing row-toggle
+      // handler; select circles and group heads live outside .recent-row so
+      // they never trigger a row expand.
+      recentList.addEventListener('click', (ev) => {
+        const box = ev.target.closest('.sel-box');
+        if (box) {
+          ev.stopPropagation();
+          if (box.dataset.gsel !== undefined) toggleGroupSelection(box.dataset.gsel);
+          else if (box.dataset.sel !== undefined) toggleRowSelection(parseInt(box.dataset.sel, 10));
+          return;
+        }
+        const head = ev.target.closest('.lg-head');
+        if (head) {
+          const key = head.parentElement.dataset.gkey;
+          if (activityCollapsed.has(key)) activityCollapsed.delete(key); else activityCollapsed.add(key);
+          head.parentElement.classList.toggle('collapsed');
+        }
+      });
+      recentList.addEventListener('keydown', (ev) => {
+        if (ev.key !== 'Enter' && ev.key !== ' ') return;
+        const box = ev.target.closest('.sel-box');
+        if (!box) return;
+        ev.preventDefault(); ev.stopPropagation();
+        if (box.dataset.gsel !== undefined) toggleGroupSelection(box.dataset.gsel);
+        else if (box.dataset.sel !== undefined) toggleRowSelection(parseInt(box.dataset.sel, 10));
       });
     })();
 
