@@ -1978,6 +1978,37 @@
     .lg-caret { width: 14px; height: 14px; color: var(--muted-soft); transition: transform 0.2s ease; flex: 0 0 auto; }
     .ledger-group.collapsed .lg-caret { transform: rotate(-90deg); }
 
+    /* month-group statement stats (outstanding / avg ROE / status counts) */
+    .lg-stats {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px;
+      padding: 9px 13px 2px; margin: 0 2px;
+    }
+    .lg-stat { display: flex; align-items: baseline; gap: 6px; }
+    .lg-stat-k { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted-soft); }
+    .lg-stat-v { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; color: var(--navy); }
+    .lg-stat-v.coral { color: var(--coral-deep); }
+    .lg-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+    .lg-badge {
+      font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+      background: rgba(10,22,40,0.05); color: var(--muted);
+    }
+    .lg-badge.paid { background: rgba(16,185,129,0.10); color: var(--success); }
+    .lg-badge.unpaid { background: rgba(10,22,40,0.06); color: var(--navy-soft); }
+    .lg-badge.overdue { background: var(--coral-soft); color: var(--coral-deep); }
+
+    /* Reports tab — Monthly / Payouts sub-toggle */
+    .reports-switch {
+      display: flex; gap: 2px; padding: 3px; margin-bottom: 16px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+    }
+    .reports-switch button {
+      flex: 1; border: 0; background: transparent; cursor: pointer;
+      font-family: inherit; font-size: 13.5px; font-weight: 600; color: var(--muted);
+      padding: 9px; border-radius: 9px; transition: background 0.15s ease, color 0.15s ease;
+    }
+    .reports-switch button.on { background: var(--surface); color: var(--navy); box-shadow: var(--shadow-sm); }
+    .report-panel[hidden] { display: none; }
+
     /* compact density — scoped to the Activity list so Statements/Payouts/
        Not-Received rows are untouched */
     .recent-mini { display: none; align-items: center; gap: 7px; margin-top: 4px; }
@@ -2387,43 +2418,24 @@
     </section>
 
     <!-- ============================================================
-         NOT RECEIVED VIEW — its own tab, off the Activity list
+         REPORTS VIEW — monthly statements + payout batches, merged.
+         A sub-toggle switches between the two panels.
          ============================================================ -->
-    <section class="view" id="notReceivedView" role="tabpanel" aria-labelledby="tabNotReceived">
+    <section class="view" id="reportsView" role="tabpanel" aria-labelledby="tabReports">
 
       <div class="title-block">
-        <div class="eyebrow">Not received</div>
-        <h1>Still <em>not received</em></h1>
-        <p class="subtitle">Payments marked "Not Received". Anything past 5 days is flagged so you can chase it.</p>
+        <div class="eyebrow">Reports</div>
+        <h1>Monthly &amp; <em>payouts</em></h1>
+        <p class="subtitle">Month-end totals and settled batches. Switch between the monthly rollup and payout batches.</p>
       </div>
 
-      <div class="recent-section">
-        <div class="recent-section-header">
-          <span class="recent-section-title">Not received <span id="notReceivedCount" style="color:var(--coral-deep);font-weight:500;"></span></span>
-          <button class="refresh-btn" id="notReceivedRefreshBtn" type="button" aria-label="Refresh">
-            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-              <path d="M12.5 2v3.5H9M1.5 12V8.5H5M11.5 5A4.5 4.5 0 0 0 3.2 4M2.5 9A4.5 4.5 0 0 0 10.8 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-            <span>Refresh</span>
-          </button>
-        </div>
-        <div class="recent-list" id="notReceivedList"></div>
+      <div class="reports-switch" id="reportsSwitch" role="tablist" aria-label="Report type">
+        <button type="button" data-report="monthly" class="on" role="tab" aria-selected="true">Monthly</button>
+        <button type="button" data-report="payouts" role="tab" aria-selected="false">Payouts</button>
       </div>
 
-    </section>
-
-    <!-- ============================================================
-         STATEMENTS VIEW
-         ============================================================ -->
-    <section class="view" id="statementsView" role="tabpanel" aria-labelledby="tabStatements">
-
-      <div class="title-block">
-        <div class="eyebrow">Statements</div>
-        <h1>Monthly <em>statement</em></h1>
-        <p class="subtitle">Each card rolls up one month of payments. Tap to drill into the entries that make it up.</p>
-      </div>
-
-      <div class="recent-section">
+      <!-- Monthly rollup panel -->
+      <div class="recent-section report-panel" id="reportMonthly">
         <div class="recent-section-header">
           <span class="recent-section-title">All months</span>
           <button class="refresh-btn" id="statementsRefreshBtn" type="button" aria-label="Refresh statements">
@@ -2449,20 +2461,8 @@
         </div>
       </div>
 
-    </section>
-
-    <!-- ============================================================
-         PAYOUTS VIEW — settled payments grouped by batch
-         ============================================================ -->
-    <section class="view" id="payoutsView" role="tabpanel" aria-labelledby="tabPayouts">
-
-      <div class="title-block">
-        <div class="eyebrow">Payouts</div>
-        <h1>Settled <em>batches</em></h1>
-        <p class="subtitle">Every payment you've cleared, grouped by batch reference and the date it was paid.</p>
-      </div>
-
-      <div class="recent-section">
+      <!-- Payout batches panel -->
+      <div class="recent-section report-panel" id="reportPayouts" hidden>
         <div class="recent-section-header">
           <span class="recent-section-title">All batches</span>
           <button class="refresh-btn" id="payoutsRefreshBtn" type="button" aria-label="Refresh payouts">
@@ -2589,33 +2589,19 @@
       <span>Log</span>
     </button>
     <button class="tab" id="tabActivity" type="button" role="tab" aria-selected="false" aria-controls="activityView" data-tab="activity">
+      <span class="tab-badge" id="notReceivedBadge" hidden></span>
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <path d="M3 12h4l2-6 4 12 2-6h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <span>Activity</span>
     </button>
-    <button class="tab" id="tabStatements" type="button" role="tab" aria-selected="false" aria-controls="statementsView" data-tab="statements">
+    <button class="tab" id="tabReports" type="button" role="tab" aria-selected="false" aria-controls="reportsView" data-tab="reports">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <path d="M6 3h9l4 4v14H6V3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
         <path d="M14 3v5h5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
         <path d="M9 12h7M9 16h7M9 8h2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
       </svg>
-      <span>Statements</span>
-    </button>
-    <button class="tab" id="tabPayouts" type="button" role="tab" aria-selected="false" aria-controls="payoutsView" data-tab="payouts">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/>
-        <path d="M8 12.5l2.5 2.5L16 9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-      <span>Payouts</span>
-    </button>
-    <button class="tab" id="tabNotReceived" type="button" role="tab" aria-selected="false" aria-controls="notReceivedView" data-tab="notreceived">
-      <span class="tab-badge" id="notReceivedBadge" hidden></span>
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/>
-        <path d="M12 7.5v5M12 16v.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-      </svg>
-      <span>Not recv</span>
+      <span>Reports</span>
     </button>
     <button class="tab admin-only" id="tabAdmin" type="button" role="tab" aria-selected="false" aria-controls="adminView" data-tab="admin">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -3079,12 +3065,10 @@
     const ACTIVE_TAB_KEY = 'cubico-pay-active-tab';
     const tabButtons = document.querySelectorAll('.tab');
     const views = {
-      log:         document.getElementById('logView'),
-      activity:    document.getElementById('activityView'),
-      notreceived: document.getElementById('notReceivedView'),
-      statements:  document.getElementById('statementsView'),
-      payouts:     document.getElementById('payoutsView'),
-      admin:       document.getElementById('adminView'),
+      log:      document.getElementById('logView'),
+      activity: document.getElementById('activityView'),
+      reports:  document.getElementById('reportsView'),
+      admin:    document.getElementById('adminView'),
     };
     let currentTab = 'log';
 
@@ -3099,13 +3083,11 @@
         btn.setAttribute('aria-selected', sel ? 'true' : 'false');
       });
       try { localStorage.setItem(ACTIVE_TAB_KEY, name); } catch (e) { /* private mode */ }
-      if (name === 'activity'    && typeof onShowActivity    === 'function') onShowActivity();
+      if (name === 'activity' && typeof onShowActivity === 'function') onShowActivity();
       // Keep the selection sum bar tied to the Activity tab only.
       if (typeof updateLedgerSumbar === 'function') updateLedgerSumbar();
-      if (name === 'notreceived' && typeof onShowNotReceived === 'function') onShowNotReceived();
-      if (name === 'statements'  && typeof onShowStatements  === 'function') onShowStatements();
-      if (name === 'payouts'    && typeof onShowPayouts    === 'function') onShowPayouts();
-      if (name === 'admin'      && typeof onShowAdmin      === 'function') onShowAdmin();
+      if (name === 'reports' && typeof onShowReports === 'function') onShowReports();
+      if (name === 'admin'   && typeof onShowAdmin   === 'function') onShowAdmin();
     }
 
     tabButtons.forEach((btn) => {
@@ -3908,6 +3890,32 @@
       }
     }
 
+    // Reports tab merges Statements (monthly) + Payouts (batches) behind a
+    // sub-toggle. Render whichever sub-panel is currently selected.
+    let reportMode = 'monthly';
+    function onShowReports() {
+      if (!dashboardCache.data) { loadDashboard(); return; }
+      if (reportMode === 'payouts') onShowPayouts(); else onShowStatements();
+    }
+    (function wireReportsSwitch() {
+      const sw = document.getElementById('reportsSwitch');
+      if (!sw) return;
+      const monthlyPanel = document.getElementById('reportMonthly');
+      const payoutsPanel  = document.getElementById('reportPayouts');
+      sw.addEventListener('click', (ev) => {
+        const b = ev.target.closest('button'); if (!b) return;
+        reportMode = b.dataset.report;
+        [...sw.children].forEach((x) => {
+          const on = x === b;
+          x.classList.toggle('on', on);
+          x.setAttribute('aria-selected', on ? 'true' : 'false');
+        });
+        if (monthlyPanel) monthlyPanel.hidden = reportMode !== 'monthly';
+        if (payoutsPanel) payoutsPanel.hidden = reportMode !== 'payouts';
+        onShowReports();
+      });
+    })();
+
     function renderPayouts(batches) {
       if (!batches || batches.length === 0) {
         payoutsList.innerHTML =
@@ -4034,25 +4042,27 @@
     // money that has arrived but has no ROE yet — those rows are otherwise
     // invisible in the PKR totals, which is what made the numbers look wrong.
     const STATUS_DEFS = [
-      { key: 'all',       label: 'All' },
-      { key: 'pending',   label: 'Pending' },
-      { key: 'confirmed', label: 'Confirmed' },
-      { key: 'unpaid',    label: 'Unpaid' },
-      { key: 'paid',      label: 'Paid' },
-      { key: 'overdue',   label: 'Overdue' },
-      { key: 'unpriced',  label: 'Needs pricing' },
+      { key: 'all',         label: 'All' },
+      { key: 'notreceived', label: 'Not received' },
+      { key: 'pending',     label: 'Pending' },
+      { key: 'confirmed',   label: 'Confirmed' },
+      { key: 'unpaid',      label: 'Unpaid' },
+      { key: 'paid',        label: 'Paid' },
+      { key: 'overdue',     label: 'Overdue' },
+      { key: 'unpriced',    label: 'Needs pricing' },
     ];
     function matchStatus(e, key) {
       const unpaid = (e.paidStatus || 'Unpaid') !== 'Paid';
       const priced = (typeof e.roe === 'number' && e.roe > 0);
       switch (key) {
-        case 'pending':   return e.receipt === 'Pending';
-        case 'confirmed': return e.receipt === 'Confirmed';
-        case 'unpaid':    return unpaid;
-        case 'paid':      return e.paidStatus === 'Paid';
-        case 'overdue':   return unpaid && typeof e.daysSince === 'number' && e.daysSince > 10;
-        case 'unpriced':  return unpaid && !priced;
-        default:          return true;
+        case 'notreceived': return e.receipt === 'Not Received';
+        case 'pending':     return e.receipt === 'Pending';
+        case 'confirmed':   return e.receipt === 'Confirmed';
+        case 'unpaid':      return unpaid;
+        case 'paid':        return e.paidStatus === 'Paid';
+        case 'overdue':     return unpaid && typeof e.daysSince === 'number' && e.daysSince > 10;
+        case 'unpriced':    return unpaid && !priced;
+        default:            return true;
       }
     }
 
@@ -4073,38 +4083,27 @@
       return activityEntries.filter((e) => e.receipt !== 'Not Received');
     }
 
+    // Not Received now lives inside Activity (as a status filter). This keeps
+    // the chase badge on the Activity tab fresh: it counts entries marked
+    // "Not Received" that are more than 5 days old (what needs chasing).
     function renderNotReceived(alerts) {
-      const list    = document.getElementById('notReceivedList');
-      const countEl = document.getElementById('notReceivedCount');
-      const badge   = document.getElementById('notReceivedBadge');
-      if (!list) return;
-      const items = (alerts || [])
-        .filter((e) => e.receipt === 'Not Received')
-        .sort((a, b) => (typeof b.daysSince === 'number' ? b.daysSince : 0)
-                      - (typeof a.daysSince === 'number' ? a.daysSince : 0));
-      const stale = items.filter((e) => typeof e.daysSince === 'number' && e.daysSince > 5).length;
-
-      // Bottom-tab badge counts the entries past 5 days (what needs chasing).
-      if (badge) {
-        if (stale > 0) { badge.textContent = String(stale); badge.hidden = false; }
-        else { badge.hidden = true; }
-      }
-
-      if (!items.length) {
-        if (countEl) countEl.textContent = '';
-        list.innerHTML = '<div class="recent-empty"><em>Nothing here.</em><br>No payments are marked "Not Received".</div>';
-        return;
-      }
-      if (countEl) countEl.textContent = stale > 0 ? ('· ' + stale + ' over 5 days') : ('· ' + items.length + ' total');
-      list.innerHTML = items.map(recentRowHtml).join('');
+      const badge = document.getElementById('notReceivedBadge');
+      if (!badge) return;
+      const stale = (alerts || []).filter((e) =>
+        e.receipt === 'Not Received' && typeof e.daysSince === 'number' && e.daysSince > 5).length;
+      if (stale > 0) { badge.textContent = String(stale); badge.hidden = false; }
+      else { badge.hidden = true; }
     }
 
     function renderStatusChips() {
       const wrap = document.getElementById('statusChips');
       if (!wrap) return;
       const base = activityBase();
+      const notRecvCount = activityEntries.filter((e) => e.receipt === 'Not Received').length;
       wrap.innerHTML = STATUS_DEFS.map((d) => {
-        const n = d.key === 'all' ? base.length : base.filter((e) => matchStatus(e, d.key)).length;
+        const n = d.key === 'all' ? base.length
+                : d.key === 'notreceived' ? notRecvCount
+                : base.filter((e) => matchStatus(e, d.key)).length;
         const active = activityFilters.status === d.key ? ' active' : '';
         const badge = (d.key !== 'all' && n > 0) ? `<span class="fchip-n">${n}</span>` : '';
         // Hide a chip that would match nothing — except the always-useful
@@ -4153,7 +4152,12 @@
 
     function applyActivityFilters() {
       const f = activityFilters;
-      let items = activityBase().filter((e) => matchStatus(e, f.status));
+      // Not Received rows are excluded from every other view (they never
+      // arrived, so they must not pollute totals) — they surface only under
+      // the dedicated "Not received" status filter.
+      let items = (f.status === 'notreceived')
+        ? activityEntries.filter((e) => e.receipt === 'Not Received')
+        : activityBase().filter((e) => matchStatus(e, f.status));
       if (f.party)   items = items.filter((e) => e.clientName === f.party);
       if (f.account) items = items.filter((e) => e.account === f.account);
       if (f.search && f.search.trim()) {
@@ -4262,6 +4266,10 @@
       const fxNote = Object.keys(s.fx).length
         ? '<span class="lg-pkr">+ ' + Object.entries(s.fx).map(([c, v]) => formatMoney(v, c)).join(' · ') + '</span>'
         : '';
+      // Month groups carry the extra statement-style metrics (outstanding
+      // PKR, avg ROE, paid/unpaid/overdue) so grouping by month reads like a
+      // mini statement.
+      const statsLine = activityFilters.group === 'month' ? monthStatsLine(g.items) : '';
       return `<div class="ledger-group${collapsed ? ' collapsed' : ''}" data-gkey="${escapeHtml(g.key)}">`
         + '<div class="lg-head">'
         +   `<span class="sel-box lg-sel${st === 'all' ? ' on' : ''}${st === 'some' ? ' mixed' : ''}" `
@@ -4277,7 +4285,35 @@
         +   '</div>'
         +   '<svg class="lg-caret" viewBox="0 0 12 8" fill="none" aria-hidden="true"><path d="M1 1.5l5 5 5-5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'
         + '</div>'
+        + statsLine
         + `<div class="rows">${g.items.map(ledgerItemHtml).join('')}</div>`
+        + '</div>';
+    }
+
+    // Statement-style rollup for one group of entries.
+    function ledgerGroupStats(items) {
+      let outstandingPKR = 0, roeSum = 0, roeCount = 0, paid = 0, unpaid = 0, overdue = 0;
+      items.forEach((e) => {
+        const isPaid = e.paidStatus === 'Paid';
+        if (isPaid) paid++; else unpaid++;
+        if (!isPaid && typeof e.finalPKR === 'number') outstandingPKR += e.finalPKR;
+        if (!isPaid && typeof e.daysSince === 'number' && e.daysSince > 10) overdue++;
+        if (typeof e.roe === 'number' && e.roe > 0) { roeSum += e.roe; roeCount++; }
+      });
+      return { outstandingPKR, avgRoe: roeCount ? roeSum / roeCount : null, paid, unpaid, overdue };
+    }
+    function monthStatsLine(items) {
+      const st = ledgerGroupStats(items);
+      const badges = [];
+      if (st.paid)    badges.push(`<span class="lg-badge paid">${st.paid} paid</span>`);
+      if (st.unpaid)  badges.push(`<span class="lg-badge unpaid">${st.unpaid} unpaid</span>`);
+      if (st.overdue) badges.push(`<span class="lg-badge overdue">${st.overdue} overdue</span>`);
+      return '<div class="lg-stats">'
+        + '<span class="lg-stat"><span class="lg-stat-k">Outstanding</span>'
+        +   `<span class="lg-stat-v${st.outstandingPKR > 0 ? ' coral' : ''}">${formatPKR(st.outstandingPKR)}</span></span>`
+        + '<span class="lg-stat"><span class="lg-stat-k">Avg ROE</span>'
+        +   `<span class="lg-stat-v">${st.avgRoe != null ? st.avgRoe.toFixed(2) : '—'}</span></span>`
+        + `<span class="lg-badges">${badges.join('')}</span>`
         + '</div>';
     }
 
@@ -5073,8 +5109,11 @@
       if (session.role === 'client') loadPartiesForClient();
       // Restore saved tab now that we know the role.
       try {
-        const saved = localStorage.getItem(ACTIVE_TAB_KEY);
-        const ok = saved === 'activity' || saved === 'notreceived' || saved === 'statements' || saved === 'payouts'
+        let saved = localStorage.getItem(ACTIVE_TAB_KEY);
+        // Map tabs that were merged/removed to their new home.
+        if (saved === 'statements' || saved === 'payouts') saved = 'reports';
+        if (saved === 'notreceived') saved = 'activity';
+        const ok = saved === 'activity' || saved === 'reports'
           || (saved === 'admin' && session.role === 'admin');
         if (ok) setTimeout(() => switchTab(saved), 0);
       } catch (e) { /* private mode */ }
