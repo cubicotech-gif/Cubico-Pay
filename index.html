@@ -1930,6 +1930,64 @@
     .ledger-seg button.on { background: var(--surface); color: var(--navy); box-shadow: var(--shadow-sm); }
     .ledger-seg.accent button.on { background: var(--coral); color: #fff; box-shadow: none; }
 
+    /* ---- decluttered filter bar: search + Filters button + panel ---- */
+    .filter-topline { display: flex; align-items: center; gap: 8px; }
+    .filter-topline .filter-search { flex: 1; }
+    .filters-toggle {
+      display: flex; align-items: center; gap: 7px; flex: 0 0 auto; cursor: pointer;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 11px;
+      color: var(--navy); font-family: inherit; font-size: 13px; font-weight: 600;
+      padding: 10px 13px; transition: border-color 0.15s ease;
+    }
+    .filters-toggle:hover { border-color: var(--border-strong); }
+    .filters-toggle.open { border-color: var(--navy); }
+    .filters-toggle svg { color: var(--muted); }
+    .filters-badge {
+      min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+      background: var(--coral); color: #fff; font-size: 11px; font-weight: 700;
+      display: inline-flex; align-items: center; justify-content: center; font-family: 'JetBrains Mono', monospace;
+    }
+    .filters-badge[hidden] { display: none; }
+
+    .active-pills { display: flex; flex-wrap: wrap; gap: 7px; }
+    .active-pills:empty { display: none; }
+    .active-pill {
+      display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+      background: var(--coral-soft); border: 1px solid rgba(255,107,91,0.28); color: var(--coral-deep);
+      border-radius: 999px; padding: 5px 8px 5px 11px; font-size: 12px; font-weight: 600;
+    }
+    .active-pill .ap-x {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 15px; height: 15px; border-radius: 50%; background: rgba(232,85,63,0.16); font-size: 13px; line-height: 1;
+    }
+    .active-pill:hover { background: rgba(255,107,91,0.16); }
+
+    .filter-panel {
+      display: flex; flex-direction: column; gap: 13px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+      padding: 14px; box-shadow: var(--shadow-sm); animation: detailIn 160ms ease;
+    }
+    .filter-panel[hidden] { display: none; }
+    .fp-row { display: flex; align-items: center; gap: 10px; }
+    .fp-row[hidden] { display: none; }
+    .fp-block { display: flex; flex-direction: column; gap: 7px; }
+    .fp-block[hidden] { display: none; }
+    .fp-label {
+      font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase;
+      color: var(--muted-soft); font-weight: 700; flex: 0 0 auto;
+    }
+    .fp-row > .fp-label { width: 56px; }
+    .fp-row .filter-sort { flex: 1; }
+    .fp-row .filter-sort select { width: 100%; }
+    .filter-panel .chip-row { margin: 0; }
+    .filter-panel .filter-foot { border-top: 1px solid var(--border); padding-top: 12px; }
+
+    .archive-note {
+      text-align: center; font-size: 12px; color: var(--muted); padding: 14px 8px 2px; line-height: 1.5;
+    }
+    .archive-note[hidden] { display: none; }
+    .archive-note b { color: var(--navy); font-weight: 600; }
+
     /* select circle — shared by rows and group headers */
     .sel-box {
       width: 20px; height: 20px; border-radius: 50%; flex: 0 0 auto; cursor: pointer;
@@ -2347,14 +2405,45 @@
           </button>
         </div>
         <div class="filter-bar-v2" id="activityFilterBar">
-          <div class="filter-search">
-            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-            <input id="filterSearch" type="search" placeholder="Search name, account, sender, batch…" autocomplete="off" enterkeyhint="search">
-            <button id="filterSearchClear" type="button" class="filter-search-clear" aria-label="Clear search">&times;</button>
+          <div class="filter-topline">
+            <div class="filter-search">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              <input id="filterSearch" type="search" placeholder="Search payments…" autocomplete="off" enterkeyhint="search">
+              <button id="filterSearchClear" type="button" class="filter-search-clear" aria-label="Clear search">&times;</button>
+            </div>
+            <button type="button" class="filters-toggle" id="filtersToggle" aria-expanded="false" aria-controls="filterPanel">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 5h18M6 12h12M10 19h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              <span>Filters</span>
+              <span class="filters-badge" id="filtersBadge" hidden></span>
+            </button>
           </div>
-          <div class="ledger-controls">
-            <div class="ledger-ctl">
-              <span class="ledger-ctl-label">Group</span>
+
+          <!-- Active filters as removable pills — only shown when set -->
+          <div class="active-pills" id="activePills"></div>
+
+          <!-- Everything else lives behind the Filters button -->
+          <div class="filter-panel" id="filterPanel" hidden>
+            <div class="fp-row">
+              <span class="fp-label">Show</span>
+              <div class="ledger-seg" id="periodSeg" role="tablist" aria-label="Time period">
+                <button type="button" data-period="recent" class="on">Recent · 2 months</button>
+                <button type="button" data-period="all">All time</button>
+              </div>
+            </div>
+            <div class="fp-block">
+              <span class="fp-label">Status</span>
+              <div class="chip-row" id="statusChips" aria-label="Filter by status"></div>
+            </div>
+            <div class="fp-block" id="partyBlock">
+              <span class="fp-label">Party</span>
+              <div class="chip-row" id="partyChips" aria-label="Filter by party"></div>
+            </div>
+            <div class="fp-block" id="accountBlock">
+              <span class="fp-label">Account</span>
+              <div class="chip-row" id="accountChips" aria-label="Filter by account"></div>
+            </div>
+            <div class="fp-row">
+              <span class="fp-label">Group</span>
               <div class="ledger-seg" id="groupSeg" role="tablist" aria-label="Group payments by">
                 <button type="button" data-group="none" class="on">None</button>
                 <button type="button" data-group="month">Month</button>
@@ -2363,20 +2452,15 @@
                 <button type="button" data-group="status">Status</button>
               </div>
             </div>
-            <div class="ledger-ctl">
-              <span class="ledger-ctl-label">Density</span>
+            <div class="fp-row">
+              <span class="fp-label">Density</span>
               <div class="ledger-seg accent" id="densitySeg" role="tablist" aria-label="Row density">
                 <button type="button" data-density="comfortable" class="on">Comfortable</button>
                 <button type="button" data-density="compact">Compact</button>
               </div>
             </div>
-          </div>
-          <div class="chip-row" id="statusChips" aria-label="Filter by status"></div>
-          <div class="chip-row" id="partyChips" aria-label="Filter by party"></div>
-          <div class="chip-row" id="accountChips" aria-label="Filter by account"></div>
-          <div class="filter-foot">
-            <span class="filter-count" id="filterCount"></span>
-            <div class="filter-foot-right">
+            <div class="fp-row">
+              <span class="fp-label">Sort</span>
               <div class="filter-sort">
                 <select id="sortBy" aria-label="Sort">
                   <option value="newest">Newest first</option>
@@ -2386,6 +2470,9 @@
                   <option value="days-desc">Days waiting: most</option>
                 </select>
               </div>
+            </div>
+            <div class="filter-foot">
+              <span class="filter-count" id="filterCount"></span>
               <button class="filter-clear" id="filterClear" type="button" hidden>Clear all</button>
             </div>
           </div>
@@ -2413,6 +2500,7 @@
             <div class="recent-meta"><span class="skeleton">Account · date · status</span></div>
           </div>
         </div>
+        <div class="archive-note" id="archiveNote" hidden></div>
       </div>
 
     </section>
@@ -4030,7 +4118,24 @@
 
     // ---------- Activity: Not Received box + chip filters / search / sort ----------
     let activityEntries = [];
-    const activityFilters = { status: 'all', account: '', party: '', search: '', sort: 'newest', group: 'none', density: 'comfortable' };
+    const activityFilters = { status: 'all', account: '', party: '', search: '', sort: 'newest', group: 'none', density: 'comfortable', period: 'recent' };
+
+    // Recent window = current + previous calendar month. Older payments are
+    // hidden from Activity UNLESS still unresolved (so nothing that needs
+    // chasing ever disappears); the settled ones live in Reports → Monthly.
+    function recentCutoffYM() {
+      const now = new Date();
+      let y = now.getFullYear(), m = now.getMonth() - 1;   // previous month (0-based)
+      if (m < 0) { m = 11; y -= 1; }
+      return y + '-' + String(m + 1).padStart(2, '0');
+    }
+    function inRecentWindow(e) {
+      if (!e.paymentDate) return true;                     // undated → never hide
+      return e.paymentDate.slice(0, 7) >= recentCutoffYM(); // 'YYYY-MM' compares fine
+    }
+    function isSettled(e) {
+      return e.receipt === 'Confirmed' && e.paidStatus === 'Paid';
+    }
 
     // Ledger multi-select: set of selected row numbers, the entries currently
     // shown (for group select-all), and which group keys are collapsed.
@@ -4115,16 +4220,21 @@
       }).join('');
     }
 
+    function setBlockHidden(id, hidden) {
+      const el = document.getElementById(id);
+      if (el) el.hidden = hidden;
+    }
     function renderPartyChips(entries) {
       const wrap = document.getElementById('partyChips');
       if (!wrap) return;
       // Party filtering is meaningful for a client (their own vendors). For
       // admin the sender-name space is huge, so free-text search covers it.
-      if (!session || session.role !== 'client') { wrap.innerHTML = ''; return; }
+      if (!session || session.role !== 'client') { wrap.innerHTML = ''; setBlockHidden('partyBlock', true); return; }
       const present = Array.from(new Set(entries
         .filter((e) => e.receipt !== 'Not Received')
         .map((e) => e.clientName).filter(Boolean)));
-      if (present.length < 2) { wrap.innerHTML = ''; return; }
+      if (present.length < 2) { wrap.innerHTML = ''; setBlockHidden('partyBlock', true); return; }
+      setBlockHidden('partyBlock', false);
       wrap.innerHTML = present.map((p) => {
         const active = activityFilters.party === p ? ' active' : '';
         return `<button type="button" class="fchip fchip-party${active}" data-party="${escapeHtml(p)}">${escapeHtml(p)}</button>`;
@@ -4137,7 +4247,8 @@
       const present = Array.from(new Set(entries
         .filter((e) => e.receipt !== 'Not Received')
         .map((e) => e.account).filter(Boolean)));
-      if (present.length < 2) { wrap.innerHTML = ''; return; }   // nothing worth filtering
+      if (present.length < 2) { wrap.innerHTML = ''; setBlockHidden('accountBlock', true); return; }   // nothing worth filtering
+      setBlockHidden('accountBlock', false);
       wrap.innerHTML = present.map((a) => {
         const active = activityFilters.account === a ? ' active' : '';
         const dot = `<span class="fchip-dot" style="background:${accountColor(a)};"></span>`;
@@ -4147,7 +4258,63 @@
 
     function filtersActive() {
       const f = activityFilters;
-      return f.status !== 'all' || !!f.account || !!f.party || !!(f.search && f.search.trim());
+      return f.status !== 'all' || !!f.account || !!f.party || !!(f.search && f.search.trim()) || f.period !== 'recent';
+    }
+
+    // The set of currently-active data filters, as removable pills.
+    function activeFilterList() {
+      const f = activityFilters;
+      const out = [];
+      if (f.status !== 'all') {
+        const def = STATUS_DEFS.find((d) => d.key === f.status);
+        out.push({ key: 'status', label: def ? def.label : f.status });
+      }
+      if (f.party)   out.push({ key: 'party',   label: f.party });
+      if (f.account) out.push({ key: 'account', label: f.account });
+      if (f.period === 'all') out.push({ key: 'period', label: 'All time' });
+      return out;
+    }
+    function clearFilterKey(key) {
+      if (key === 'status')  activityFilters.status = 'all';
+      if (key === 'party')   activityFilters.party = '';
+      if (key === 'account') activityFilters.account = '';
+      if (key === 'period')  activityFilters.period = 'recent';
+      syncFilterControls();
+      applyActivityFilters();
+    }
+    function syncFilterControls() {
+      renderStatusChips();
+      renderPartyChips(activityEntries);
+      renderAccountChips(activityEntries);
+      const periodSeg = document.getElementById('periodSeg');
+      if (periodSeg) [...periodSeg.children].forEach((b) =>
+        b.classList.toggle('on', b.dataset.period === activityFilters.period));
+    }
+    function renderActivePills() {
+      const wrap = document.getElementById('activePills');
+      if (!wrap) return;
+      wrap.innerHTML = activeFilterList().map((a) =>
+        `<button type="button" class="active-pill" data-clear="${a.key}" aria-label="Remove filter ${escapeHtml(a.label)}">`
+        + `${escapeHtml(a.label)}<span class="ap-x" aria-hidden="true">&times;</span></button>`
+      ).join('');
+    }
+    function updateFiltersBadge() {
+      const badge = document.getElementById('filtersBadge');
+      if (!badge) return;
+      const n = activeFilterList().length;
+      if (n > 0) { badge.textContent = String(n); badge.hidden = false; }
+      else badge.hidden = true;
+    }
+    function updateArchiveNote(archived) {
+      const note = document.getElementById('archiveNote');
+      if (!note) return;
+      if (activityFilters.period === 'recent' && archived > 0) {
+        note.innerHTML = archived + ' older settled ' + (archived === 1 ? 'payment is' : 'payments are')
+          + ' hidden. Find them in <b>Reports → Monthly</b>, or switch to <b>All time</b> in Filters.';
+        note.hidden = false;
+      } else {
+        note.hidden = true;
+      }
     }
 
     function applyActivityFilters() {
@@ -4165,7 +4332,17 @@
         items = items.filter((e) => [e.clientName, e.account, e.actualSenderName, e.batchRef, e.loggedBy]
           .some((v) => String(v || '').toLowerCase().indexOf(q) !== -1));
       }
+      // Time window: keep recent (current + last month) OR anything unresolved.
+      let archivedCount = 0;
+      if (f.period === 'recent') {
+        const before = items.length;
+        items = items.filter((e) => inRecentWindow(e) || !isSettled(e));
+        archivedCount = before - items.length;
+      }
       items = sortActivity(items, f.sort);
+      updateArchiveNote(archivedCount);
+      renderActivePills();
+      updateFiltersBadge();
       updateFilterFoot(items.length);
       if (!items.length) {
         activityShown = [];
@@ -4457,11 +4634,10 @@
         activityFilters.account = '';
         activityFilters.party = '';
         activityFilters.search = '';
+        activityFilters.period = 'recent';
         if (search) search.value = '';
         if (searchClear) searchClear.style.display = 'none';
-        renderStatusChips();
-        renderPartyChips(activityEntries);
-        renderAccountChips(activityEntries);
+        syncFilterControls();
         applyActivityFilters();
       });
 
@@ -4539,6 +4715,33 @@
         ev.preventDefault(); ev.stopPropagation();
         if (box.dataset.gsel !== undefined) toggleGroupSelection(box.dataset.gsel);
         else if (box.dataset.sel !== undefined) toggleRowSelection(parseInt(box.dataset.sel, 10));
+      });
+    })();
+
+    // ---- Decluttered filter bar: panel toggle, period, active pills ----
+    (function wireFilterUI() {
+      const toggle = document.getElementById('filtersToggle');
+      const panel  = document.getElementById('filterPanel');
+      if (toggle && panel) toggle.addEventListener('click', () => {
+        const open = panel.hidden;   // about to open
+        panel.hidden = !open;
+        toggle.classList.toggle('open', open);
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+
+      const periodSeg = document.getElementById('periodSeg');
+      if (periodSeg) periodSeg.addEventListener('click', (ev) => {
+        const b = ev.target.closest('button'); if (!b) return;
+        activityFilters.period = b.dataset.period;
+        [...periodSeg.children].forEach((x) => x.classList.toggle('on', x === b));
+        applyActivityFilters();
+      });
+
+      // Removable active-filter pills.
+      const pills = document.getElementById('activePills');
+      if (pills) pills.addEventListener('click', (ev) => {
+        const pill = ev.target.closest('.active-pill'); if (!pill) return;
+        clearFilterKey(pill.dataset.clear);
       });
     })();
 
