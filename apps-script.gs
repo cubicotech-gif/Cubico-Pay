@@ -51,7 +51,8 @@ const COL = {
   pkrAmount:   6,  feePct:     7,  finalPKR:   8,  paidStatus: 9, daysSince: 10,
   batchRef:   11,  roe:       12,  entryDate: 13,
   actualUsd:  14,  actualSender: 15, paidDate: 16, clientId: 17, loggedBy: 18,
-  currency:   19,  screenshotUrl: 20, partyFeePct: 21
+  currency:   19,  screenshotUrl: 20, partyFeePct: 21,
+  partyPaid:  22,  partyPaidDate: 23, partyPayRef: 24   // the client's payout to the party
 };
 
 // Payments logged on/after this date with no screenshot get flagged in the app.
@@ -156,12 +157,15 @@ function doPost(e) {
     if (action === 'logPayment')    return handleLogPayment_(data, session);
 
     // A party login can only log its own payments and manage its own login.
+    if (action === 'attachScreenshot') return handleAttachScreenshot_(data, session);
     if (session.role === 'party') return jsonResponse({ ok: false, error: 'Forbidden' });
 
     // Party management — a client manages their own list; an admin may
     // manage a given client's list by passing clientId. Allowed for both.
     if (action === 'parties.add')    return handleAddParty_(data, session);
     if (action === 'parties.remove') return handleRemoveParty_(data, session);
+    if (action === 'partyPayout')          return handlePartyPayout_(data, session);
+    if (action === 'parties.linkHistory')  return handleLinkPartyHistory_(data, session);
     if (action === 'parties.setFee')       return handleSetPartyFee_(data, session);
     if (action === 'parties.createLogin')  return handleCreatePartyLogin_(data, session);
     if (action === 'parties.resetLogin')   return handleResetPartyLogin_(data, session);
@@ -540,6 +544,9 @@ function backfillPartyFee_(clientId, partyName, fee) {
     try { lock = LockService.getScriptLock(); lock.waitLock(10000); } catch (e) { lock = null; }
     const sheet = getPaymentsSheetOrThrow_();
     ensureColumnHeader_(sheet, COL.partyFeePct, 'partyFeePct');
+  ensureColumnHeader_(sheet, COL.partyPaid, 'partyPaid');
+  ensureColumnHeader_(sheet, COL.partyPaidDate, 'partyPaidDate');
+  ensureColumnHeader_(sheet, COL.partyPayRef, 'partyPayRef');
     const last = sheet.getLastRow();
     if (last < 2) return;
     const n = last - 1;
@@ -565,6 +572,140 @@ function backfillPartyFee_(clientId, partyName, fee) {
   } finally {
     if (lock) { try { lock.releaseLock(); } catch (e) { /* ignore */ } }
   }
+}
+
+
+/**
+ * Link earlier payments to a party. Payments logged before client accounts
+ * existed carry clientId "legacy" (or blank) and the sender name. Any such
+ * payment whose name matches the party (or the alias given) is assigned to
+ * this client. Never touches payments that already belong to a client.
+ * Returns how many payments were linked.
+ */
+function claimPartyHistory_(clientId, partyName, aliasName) {
+  let lock = null;
+  try {
+    try { lock = LockService.getScriptLock(); lock.waitLock(10000); } catch (e) { lock = null; }
+    const sheet = getPaymentsSheetOrThrow_();
+    const last = sheet.getLastRow();
+    if (last < 2) return 0;
+    const n = last - 1;
+    const names = sheet.getRange(2, COL.clientName, n, 1).getValues();
+    const ids   = sheet.getRange(2, COL.clientId,   n, 1).getValues();
+    const party = String(partyName).trim();
+    const alias = String(aliasName || '').trim();
+    const want  = (alias || party).toLowerCase();
+    let linked = 0, renamed = false;
+    for (let i = 0; i < n; i++) {
+      const nm = String(names[i][0]).trim();
+      const id = String(ids[i][0]).trim().toLowerCase();
+      if (!nm || nm.toLowerCase() !== want) continue;
+      if (id !== '' && id !== 'legacy') continue;
+      ids[i][0] = clientId;
+      if (alias && alias.toLowerCase() !== party.toLowerCase()) { names[i][0] = party; renamed = true; }
+      linked++;
+    }
+    if (linked) {
+      sheet.getRange(2, COL.clientId, n, 1).setValues(ids);
+      if (renamed) sheet.getRange(2, COL.clientName, n, 1).setValues(names);
+      bustDashboardCache_({ clientId: clientId });
+    }
+    return linked;
+  } catch (err) {
+    console.error('claimPartyHistory_ failed: ' + err);
+    return 0;
+  } finally {
+    if (lock) { try { lock.releaseLock(); } catch (e) { /* ignore */ } }
+  }
+}
+
+function handleLinkPartyHistory_(data, session) {
+  const cid = partyClientId_(data, session);
+  const p = findParty_(cid, data.party);
+  if (!p || !p.active) return jsonResponse({ ok: false, error: 'Party not found' });
+  const linked = claimPartyHistory_(cid, p.party, data.alias);
+  if (p.feePct !== '') backfillPartyFee_(cid, p.party, p.feePct);
+  return partyResponse_(cid, { linked: linked });
+}
+
+// ============================================
+// ROW LOOKUP BY KEY, PAYOUTS TO PARTIES, LATE SCREENSHOTS
+// ============================================
+
+/** Stable id of a payment row object (row numbers shift as new rows are inserted on top). */
+function entryKey_(r) {
+  const day = r.paymentDate instanceof Date ? Math.floor(r.paymentDate.getTime() / 86400000) : String(r.paymentDate);
+  if (r.entryDate instanceof Date) return 'E' + Math.floor(r.entryDate.getTime() / 1000) + '|' + day;
+  return 'L|' + day + '|' + r.clientName + '|' + r.usdAmount + '|' + r.account;
+}
+
+/** Can this session act on this payment row? */
+function canActOnRow_(session, r) {
+  if (session.role === 'admin') return true;
+  if (r.clientId !== session.clientId) return false;
+  if (session.role === 'party') {
+    return String(r.clientName || '').trim().toLowerCase() === String(session.partyName || '').trim().toLowerCase();
+  }
+  return true;
+}
+
+/**
+ * The client marks payments as paid out to a party (or undoes it). Only
+ * Confirmed receipts can be paid out. Writes the three partyPaid* columns,
+ * which the admin can also see in the sheet.
+ */
+function handlePartyPayout_(data, session) {
+  const keys = Array.isArray(data.keys) ? data.keys.map(String) : [];
+  if (!keys.length) return jsonResponse({ ok: false, error: 'Nothing selected' });
+  if (keys.length > 300) return jsonResponse({ ok: false, error: 'Select 300 payments or fewer at a time' });
+  const paid = toBool_(data.paid);
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+  let when = '';
+  if (paid) {
+    const ds = String(data.date || Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd'));
+    try { when = Utilities.parseDate(ds, tz, 'yyyy-MM-dd'); } catch (e) { when = ''; }
+    if (!when || isNaN(when.getTime())) return jsonResponse({ ok: false, error: 'Invalid date' });
+  }
+  const ref = String(data.ref || '').trim().slice(0, 120);
+
+  const sheet = getPaymentsSheetOrThrow_();
+  ensureLoggedByColumn_(sheet);
+  const byKey = {};
+  readFilledRows_().forEach((r) => { byKey[entryKey_(r)] = r; });
+
+  let updated = 0, skipped = 0;
+  keys.forEach((k) => {
+    const r = byKey[k];
+    if (!r || !canActOnRow_(session, r)) { skipped++; return; }
+    if (paid && r.receipt !== 'Confirmed') { skipped++; return; }
+    if (paid && r.partyPaid === 'Paid') { skipped++; return; }
+    sheet.getRange(r.row, COL.partyPaid, 1, 3).setValues([[paid ? 'Paid' : '', paid ? when : '', paid ? ref : '']]);
+    updated++;
+  });
+  if (updated) {
+    sheet.getRange(2, COL.partyPaidDate, Math.max(1, sheet.getLastRow() - 1), 1).setNumberFormat('yyyy-mm-dd');
+    bustDashboardCache_({ clientId: session.role === 'client' ? session.clientId : '' });
+  }
+  return jsonResponse({ ok: true, updated: updated, skipped: skipped });
+}
+
+/** Attach a screenshot to a payment that was logged without one. */
+function handleAttachScreenshot_(data, session) {
+  const key = String(data.key || '');
+  if (!key) return jsonResponse({ ok: false, error: 'Missing payment key' });
+  if (!data.screenshot) return jsonResponse({ ok: false, error: 'No image received' });
+  const r = readFilledRows_().filter((x) => entryKey_(x) === key)[0];
+  if (!r || !canActOnRow_(session, r)) return jsonResponse({ ok: false, error: 'Payment not found' });
+  if (r.screenshotUrl && session.role !== 'admin') {
+    return jsonResponse({ ok: false, error: 'This payment already has a screenshot' });
+  }
+  const sheet = getPaymentsSheetOrThrow_();
+  ensureLoggedByColumn_(sheet);
+  const url = saveScreenshot_(data.screenshot, r.clientName);
+  if (!url) return jsonResponse({ ok: false, error: 'Could not read the image' });
+  sheet.getRange(r.row, COL.screenshotUrl).setValue(url);
+  bustDashboardCache_({ clientId: r.clientId });
+  return jsonResponse({ ok: true, url: url });
 }
 
 function handleSetPartyFee_(data, session) {
@@ -645,14 +786,18 @@ function handleAddParty_(data, session) {
           String(values[i][1]).trim().toLowerCase() === party.toLowerCase()) {
         // Already exists (maybe removed earlier) — just re-activate it.
         sheet.getRange(i + 2, 3).setValue(true);
-        if (fee !== '') { sheet.getRange(i + 2, 5).setValue(fee); backfillPartyFee_(cid, party, fee); }
-        return partyResponse_(cid);
+        if (fee !== '') sheet.getRange(i + 2, 5).setValue(fee);
+        const relinked = claimPartyHistory_(cid, party, '');
+        if (fee !== '') backfillPartyFee_(cid, party, fee);
+        return partyResponse_(cid, { linked: relinked });
       }
     }
   }
   sheet.appendRow([cid, party, true, new Date(), fee, '']);
+  // Attach this party's earlier payments (logged before logins existed).
+  const linked = claimPartyHistory_(cid, party, '');
   backfillPartyFee_(cid, party, fee);
-  return partyResponse_(cid);
+  return partyResponse_(cid, { linked: linked });
 }
 
 function handleRemoveParty_(data, session) {
@@ -1106,7 +1251,7 @@ function readFilledRows_() {
   if (maxRows < 2) return [];
 
   const maxCols = sheet.getMaxColumns();
-  const readCols = Math.max(13, Math.min(21, maxCols));
+  const readCols = Math.max(13, Math.min(24, maxCols));
 
   const values = sheet.getRange(2, 1, maxRows - 1, readCols).getValues();
   const rows = [];
@@ -1136,7 +1281,10 @@ function readFilledRows_() {
       loggedBy:         readCols >= 18 ? String(r[17] || '') : '',
       currency:         readCols >= 19 ? String(r[18] || '') : '',
       screenshotUrl:    readCols >= 20 ? String(r[19] || '') : '',
-      partyFeePct:      readCols >= 21 ? r[20] : ''
+      partyFeePct:      readCols >= 21 ? r[20] : '',
+      partyPaid:        readCols >= 22 ? String(r[21] || '') : '',
+      partyPaidDate:    readCols >= 23 ? r[22] : '',
+      partyPayRef:      readCols >= 24 ? String(r[23] || '') : ''
     });
   }
   return rows;
@@ -1344,8 +1492,11 @@ function partyView_(r) {
   const gross = isNumeric_(r.pkrAmount) && isNumeric_(r.roe) && r.roe > 0 ? r.pkrAmount : '';
   v.finalPKR = (gross !== '' && pp !== '') ? round2_(gross * (1 - pp)) : '';   // net to the party
   v.feePct = '';
-  v.batchRef = '';
   v.actualSenderName = '';
+  // For a party, "paid" means the client paid them — never the admin->client payout.
+  v.paidStatus = r.partyPaid === 'Paid' ? 'Paid' : 'Unpaid';
+  v.paidDate = r.partyPaid === 'Paid' ? r.partyPaidDate : '';
+  v.batchRef = r.partyPayRef || '';
   return v;
 }
 
@@ -1381,6 +1532,11 @@ function serializeEntry_(r, role) {
     currency: r.currency || 'USD',
     screenshotUrl: r.screenshotUrl || '',
     partyFeePct: pp,
+    key: entryKey_(r),
+    partyPaid: r.partyPaid === 'Paid' ? 'Paid' : '',
+    partyPaidDate: r.partyPaidDate instanceof Date
+      ? Utilities.formatDate(r.partyPaidDate, tz, 'yyyy-MM-dd') : '',
+    partyPayRef: r.partyPayRef || '',
     // Logged after the rule started, not a "never arrived" claim, and no image.
     noScreenshot: !r.screenshotUrl && r.receipt !== 'Not Received' &&
                   entryTs >= new Date(SCREENSHOT_FLAG_FROM + 'T00:00:00').getTime()
@@ -1536,6 +1692,9 @@ function applyDataRangeFormatting_(sheet, startRow, numRows) {
   const full = sheet.getRange(startRow, 1, numRows, COL.loggedBy);
   if (sheet.getMaxColumns() >= COL.partyFeePct) {
     sheet.getRange(startRow, COL.partyFeePct, numRows).setNumberFormat('0.00%');
+  }
+  if (sheet.getMaxColumns() >= COL.partyPaidDate) {
+    sheet.getRange(startRow, COL.partyPaidDate, numRows).setNumberFormat('yyyy-mm-dd');
   }
   full.setFontFamily(SHEET_FORMAT.font)
       .setFontSize(SHEET_FORMAT.bodySize)
