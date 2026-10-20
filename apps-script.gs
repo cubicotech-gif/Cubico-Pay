@@ -1568,11 +1568,12 @@ function syncHisaabRow_(paymentsSheet, rowN) {
 }
 
 function hisaabPaidDate_(r) {
-  // Payments marked Paid before column P existed have no paid date; use the
-  // date the money was received (column A) rather than today's date.
+  // My Hisaab is dated by when the money was RECEIVED (column A). The paid
+  // date in column P is only the day the Paid status was set, which is often
+  // a bulk edit long after the real payment, so it is not used here.
+  if (r[0] instanceof Date) return r[0];
   const d = r[COL.paidDate - 1];
-  if (d instanceof Date) return d;
-  return r[0] instanceof Date ? r[0] : new Date();
+  return d instanceof Date ? d : new Date();
 }
 
 function normPct_(v) {
