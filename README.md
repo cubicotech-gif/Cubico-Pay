@@ -82,6 +82,6 @@ payment marked **Paid** gets one row there with the commission on it:
   actual amount refreshes it.
 - Pick a month in the **Select month** dropdown (H1) to see that month's commission and payment count.
 - It lives in the sheet only; the PWA never shows it.
-- Payments with no paid date use their received date. `rebuildMyHisaab()` re-dates and sorts all rows, keeping each row's commission %.
+- Rows are dated by the paid date (Payments Log column P); if that is empty, by the received date (column A).
 - After pasting the new `apps-script.gs` and redeploying, run
   `backfillMyHisaab()` once from the editor to copy payments already marked Paid.
