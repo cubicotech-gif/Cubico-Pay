@@ -1345,9 +1345,7 @@ function onEdit(e) {
   } catch (err) { /* non-fatal */ }
 
   // Keep My Hisaab in step with manual edits (cap guards huge pastes).
-  for (let i = 0; i < Math.min(numRows, 200); i++) {
-    if (startRow + i >= 2) syncHisaabRow_(sheet, startRow + i);
-  }
+  syncHisaabRows_(sheet, startRow, Math.min(numRows, 500));
 
   bustDashboardCache_();
 }
@@ -1514,7 +1512,8 @@ function rebuildMyHisaab() {
   if (!fresh.length) return;
   const out = fresh.map(function (f, i) {
     const k = hisaabKey_(f.r);
-    const rt = oldRates[k] !== undefined && oldRates[k] !== '' ? oldRates[k] : rate;
+    const old = oldRates[k] !== undefined ? oldRates[k] : oldRates[k.split('|')[0]];
+    const rt = old !== undefined && old !== '' ? old : rate;
     return buildHisaabRow_(f.r, HISAAB_FIRST_ROW + i, rt);
   });
   hs.getRange(HISAAB_FIRST_ROW, 1, out.length, HISAAB_HEADERS.length).setValues(out);
@@ -1523,48 +1522,71 @@ function rebuildMyHisaab() {
 }
 
 /**
- * Bring My Hisaab in line with one Payments Log row: add/refresh it when
- * Paid, remove it otherwise. Never throws — a Hisaab problem must not
- * block the payment action that triggered it.
+ * Bring My Hisaab in line with a block of Payments Log rows: add/refresh
+ * each one that is Paid, remove each that is not. Works in one pass (one
+ * read of the block, one read of the keys, bulk writes) so a bulk status
+ * change cannot run out of time half way. Never throws — a Hisaab problem
+ * must not block the payment action that triggered it.
  */
-function syncHisaabRow_(paymentsSheet, rowN) {
+function syncHisaabRows_(paymentsSheet, startRow, numRows) {
   let lock = null;
   try {
+    startRow = Math.max(startRow, 2);
+    if (numRows < 1) return;
     SpreadsheetApp.flush();
-    const r = paymentsSheet.getRange(rowN, 1, 1, COL.paidDate).getValues()[0];
-    if (r[0] === '' || r[0] === null) return;
-    const key = hisaabKey_(r);
+    const block = paymentsSheet.getRange(startRow, 1, numRows, COL.paidDate).getValues();
 
     // LockService may be unavailable inside a simple onEdit trigger.
     try { lock = LockService.getScriptLock(); lock.waitLock(10000); } catch (e) { lock = null; }
 
     const hs = getHisaabSheet_();
-    const keys = hisaabKeys_(hs);
-    const idx = keys.indexOf(key);
-    const found = idx === -1 ? 0 : HISAAB_FIRST_ROW + idx;
-    const isPaid = r[COL.paidStatus - 1] === 'Paid' && isNumeric_(r[COL.pkrAmount - 1]);
+    const index = {};
+    hisaabKeys_(hs).forEach(function (k, i) { index[k] = HISAAB_FIRST_ROW + i; });
+    const rate = readHisaabRate_(hs);
 
-    if (!isPaid) {
-      if (found) hs.deleteRow(found);
-      return;
-    }
-    if (found) {
-      // Refresh amounts but keep the commission % this row was stamped with.
-      const v = buildHisaabRow_(r, found, readHisaabRate_(hs));
-      hs.getRange(found, HC.date, 1, HC.fee).setValues([v.slice(0, HC.fee)]);
-      hs.getRange(found, HC.finalPkr, 1, 3).setValues([v.slice(HC.finalPkr - 1)]);
-      applyHisaabFormatting_(hs, found, 1);
-    } else {
-      const n = hisaabLastRow_(hs) + 1;
-      hs.getRange(n, 1, 1, HISAAB_HEADERS.length)
-        .setValues([buildHisaabRow_(r, n, readHisaabRate_(hs))]);
-      applyHisaabFormatting_(hs, n, 1);
+    const deletes = [];
+    const adds = [];
+    block.forEach(function (r) {
+      if (r[0] === '' || r[0] === null) return;
+      const key = hisaabKey_(r);
+      const found = index[key] || 0;
+      const isPaid = r[COL.paidStatus - 1] === 'Paid' && isNumeric_(r[COL.pkrAmount - 1]);
+      if (!isPaid) {
+        if (found) deletes.push(found);
+        return;
+      }
+      if (found) {
+        // Refresh amounts but keep the commission % this row was stamped with.
+        const v = buildHisaabRow_(r, found, rate);
+        hs.getRange(found, HC.date, 1, HC.fee).setValues([v.slice(0, HC.fee)]);
+        hs.getRange(found, HC.finalPkr, 1, 3).setValues([v.slice(HC.finalPkr - 1)]);
+        applyHisaabFormatting_(hs, found, 1);
+      } else {
+        index[key] = -1;               // guard against the same key twice in one block
+        adds.push(r);
+      }
+    });
+
+    // Delete bottom-up so row numbers stay valid, then append the new rows.
+    deletes.sort(function (x, y) { return y - x; })
+           .filter(function (x, i, arr) { return i === 0 || x !== arr[i - 1]; })
+           .forEach(function (rowNum) { hs.deleteRow(rowNum); });
+
+    if (adds.length) {
+      const start = hisaabLastRow_(hs) + 1;
+      const out = adds.map(function (r, i) { return buildHisaabRow_(r, start + i, rate); });
+      hs.getRange(start, 1, out.length, HISAAB_HEADERS.length).setValues(out);
+      applyHisaabFormatting_(hs, start, out.length);
     }
   } catch (err) {
-    console.error('My Hisaab sync failed for row ' + rowN + ': ' + err);
+    console.error('My Hisaab sync failed for rows ' + startRow + '+' + numRows + ': ' + err);
   } finally {
     if (lock) { try { lock.releaseLock(); } catch (e) { /* ignore */ } }
   }
+}
+
+function syncHisaabRow_(paymentsSheet, rowN) {
+  syncHisaabRows_(paymentsSheet, rowN, 1);
 }
 
 function hisaabPaidDate_(r) {
@@ -1584,10 +1606,10 @@ function normPct_(v) {
 
 /** Stable identity of a payment, independent of its (shifting) row number. */
 function hisaabKey_(r) {
+  const day = r[0] instanceof Date ? Math.floor(r[0].getTime() / 86400000) : String(r[0]);
   const e = r[COL.entryDate - 1];
-  if (e instanceof Date) return 'E' + Math.floor(e.getTime() / 1000);
-  const d = r[0] instanceof Date ? r[0].getTime() : String(r[0]);
-  return 'L|' + d + '|' + r[1] + '|' + r[2] + '|' + r[3];
+  if (e instanceof Date) return 'E' + Math.floor(e.getTime() / 1000) + '|' + day;
+  return 'L|' + day + '|' + r[1] + '|' + r[2] + '|' + r[3];
 }
 
 function readHisaabRate_(hs) {
@@ -1729,4 +1751,13 @@ function applyHisaabFormatting_(hs, startRow, numRows) {
   hs.getRange(startRow, HC.running,    numRows).setNumberFormat('"₨"#,##0.00');
   hs.getRange(startRow, HC.finalPkr,   numRows).setNumberFormat('"₨"#,##0');
   hs.getRange(startRow, HC.key,        numRows).setNumberFormat('@').setFontColor('#9CA3AF');
+}
+
+/** Adds a "My Hisaab" menu to the spreadsheet for a one-click refresh. */
+function onOpen() {
+  try {
+    SpreadsheetApp.getUi().createMenu('My Hisaab')
+      .addItem('Refresh from Payments Log', 'rebuildMyHisaab')
+      .addToUi();
+  } catch (e) { /* not available in every context */ }
 }
