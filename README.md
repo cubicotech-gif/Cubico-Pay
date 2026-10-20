@@ -127,3 +127,17 @@ Three kinds of login:
   spelling. Payments that already belong to a client are never moved.
 - **Late screenshots.** Any payment without a screenshot has an **Attach
   screenshot** button in its details (client, party for their own, admin).
+
+## Performance notes
+
+- The backend caches the raw sheet rows (gzipped, chunked) for 10 minutes and
+  clears the cache on every write, so most opens skip reading the sheet. Each
+  role's view is built from the cached rows.
+- Dashboard payloads send each payment once (no duplicate copies for alerts or
+  payout batches).
+- Spreadsheet writes are batched (formatting, header checks) so logging and
+  editing a payment make far fewer API calls.
+- In the app: row details are built only when a row is opened, Activity shows
+  60 payments at a time ("Show more"), the last dashboard is saved on the device
+  and painted instantly on the next open, and the app no longer waits for the
+  session check before showing.

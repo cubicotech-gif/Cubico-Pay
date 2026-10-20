@@ -29,6 +29,8 @@
     media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2)" />
 
   <!-- Fonts -->
+  <link rel="preconnect" href="https://script.google.com">
+  <link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400;1,9..144,500&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -3062,7 +3064,7 @@
     }
     function clearSession() {
       session = null;
-      try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+      try { localStorage.removeItem(SESSION_KEY); localStorage.removeItem('cubico-pay-dash-v1'); } catch (e) {}
     }
 
     // ============================================================
@@ -3759,6 +3761,26 @@
     function toggleRow(row) {
       const open = row.classList.toggle('open');
       row.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) fillRowDetail(row);
+    }
+
+    // Row details are built the first time a row is opened, not for every
+    // row up front — with hundreds of payments that was most of the page.
+    function entryByRow(rowNum) {
+      const all = (dashboardCache.data && dashboardCache.data.allEntries) || [];
+      if (dashboardCache.src !== all) {
+        dashboardCache.src = all;
+        dashboardCache.byRow = new Map(all.map((e) => [e.row, e]));
+      }
+      return dashboardCache.byRow.get(rowNum);
+    }
+    function fillRowDetail(row) {
+      const box = row.querySelector('.recent-detail');
+      if (!box || box.dataset.filled) return;
+      const e = entryByRow(parseInt(row.dataset.row, 10));
+      if (!e) return;
+      box.innerHTML = detailGridHtml(e);
+      box.dataset.filled = '1';
     }
 
     function onShowActivity() {
@@ -3809,6 +3831,30 @@
       return { totalUnpaidPKR, totalReceivedUSDThisMonth, overdueCount, pendingReceiptsCount };
     }
 
+    // Keep the last dashboard on the device and paint it straight away on the
+    // next open while the fresh copy loads (the screen no longer starts empty).
+    const DASH_LS_KEY = 'cubico-pay-dash-v1';
+    function saveDashLocal(j) {
+      try {
+        localStorage.setItem(DASH_LS_KEY, JSON.stringify({ u: session && session.username, t: Date.now(), d: j }));
+      } catch (e) { /* quota / private mode: just skip */ }
+    }
+    function hydrateDashLocal() {
+      try {
+        const raw = localStorage.getItem(DASH_LS_KEY);
+        if (!raw || !session) return false;
+        const o = JSON.parse(raw);
+        if (!o || o.u !== session.username || Date.now() - o.t > 7 * 864e5 || !o.d) return false;
+        dashboardCache.data = o.d;
+        renderSummary(summaryFromEntries(o.d.allEntries || []));
+        renderActivity(o.d.allEntries || []);
+        renderNotReceived(o.d.allEntries || []);
+        renderStatements(o.d.months || []);
+        renderPayouts(o.d.payouts || []);
+        return true;
+      } catch (e) { return false; }
+    }
+
     async function loadDashboard() {
       if (dashboardLoading) return;
       if (!session) return;
@@ -3818,6 +3864,7 @@
         const j = await apiGet('dashboard');
         if (!j.ok) throw new Error(j.error || 'Dashboard error');
         dashboardCache.data = j;
+        saveDashLocal(j);
         renderSummary(summaryFromEntries(j.allEntries || []));
         renderActivity(j.allEntries || []);
         renderNotReceived(j.allEntries || []);
@@ -3978,7 +4025,7 @@
         +   mini
         +   (meta ? `<div class="recent-meta">${meta}</div>` : '')
         +   (tags ? `<div class="recent-tags">${tags}</div>` : '')
-        +   `<div class="recent-detail">${detailGridHtml(e)}</div>`
+        +   '<div class="recent-detail"></div>'
         + '</div>';
     }
 
@@ -4307,7 +4354,11 @@
       const batches = (dashboardCache.data && dashboardCache.data.payouts) || [];
       const found = batches.find((x) => x.batchRef === batchKey);
       const list = card.querySelector('.month-entries .recent-list');
-      const items = (found && found.entries) || [];
+      let items = (found && found.entries) || [];   // older cached payloads carried full entries
+      if (found && found.entryKeys) {
+        const keys = new Set(found.entryKeys);
+        items = ((dashboardCache.data && dashboardCache.data.allEntries) || []).filter((e) => keys.has(e.key));
+      }
       list.innerHTML = items.length
         ? items.map(recentRowHtml).join('')
         : '<div class="recent-empty">No entries.</div>';
@@ -4604,14 +4655,29 @@
       renderLedger(items);
     }
 
+    recentList.addEventListener('click', (ev) => {
+      if (!ev.target.closest('#activityMore')) return;
+      activityLimit += 60;
+      renderLedger(activityShown);
+    });
+
     // ============================================================
     // LEDGER — grouped/flat render, multi-select, live subtotals
     // ============================================================
+    let activityLimit = 60, activitySig = '';
     function renderLedger(items) {
       activityShown = items.slice();
       recentList.classList.toggle('compact', activityFilters.density === 'compact');
       if (activityFilters.group === 'none') {
-        recentList.innerHTML = items.map(ledgerItemHtml).join('');
+        // Render a page at a time; a filter change starts again from the top.
+        const f = activityFilters;
+        const sig = [f.status, f.account, f.party, f.search, f.sort, f.period].join('|');
+        if (sig !== activitySig) { activitySig = sig; activityLimit = 60; }
+        const part = items.slice(0, activityLimit);
+        recentList.innerHTML = part.map(ledgerItemHtml).join('')
+          + (items.length > part.length
+              ? `<button type="button" class="btn btn-ghost" id="activityMore" style="width:100%;margin-top:10px;">Show more (${items.length - part.length} left)</button>`
+              : '');
       } else {
         recentList.innerHTML = buildLedgerGroups(items).map(ledgerGroupHtml).join('');
       }
@@ -5980,6 +6046,7 @@
     function onAuthReady() {
       if (!session) return;
       applyRole(session.role);
+      if (!dashboardCache.data) hydrateDashLocal();
       if (navigator.onLine) loadDashboard();
       if (session.role === 'admin') loadClientsForPicker();
       if (session.role === 'client') loadPartiesForClient();
@@ -6004,25 +6071,24 @@
       const saved = loadSession();
       if (!saved) { showAuthScreen(); return; }
       session = saved;
+      // Show the app straight away from the saved session; verify it in the
+      // background. An expired or revoked session bounces to login below.
+      hideAuthScreen();
+      onAuthReady();
       try {
         const me = await apiGet('me');
         if (!me.ok) { clearSession(); showAuthScreen(); return; }
-        // Re-sync any drift between localStorage and server truth.
+        const roleChanged = session && session.role !== me.role;
+        if (!session) return;
         session.role     = me.role;
         session.clientId = me.clientId;
         session.partyName = me.partyName || '';
         session.username = me.username;
         saveSession(session);
-        hideAuthScreen();
-        onAuthReady();
+        if (roleChanged) location.reload();
       } catch (err) {
-        // If the error was AUTH, handleAuthExpired() already cleared the
-        // session and showed the auth screen — don't undo that. Anything
-        // else (network failure, timeout) → keep the cached session and
-        // let the user into the app shell; the dashboard load will retry.
-        if (!session) return;
-        hideAuthScreen();
-        onAuthReady();
+        // AUTH errors were already handled (login screen shown). Network
+        // failures keep the cached session so the app still opens offline.
       }
     })();
   </script>
