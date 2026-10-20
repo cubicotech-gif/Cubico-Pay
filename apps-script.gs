@@ -51,8 +51,11 @@ const COL = {
   pkrAmount:   6,  feePct:     7,  finalPKR:   8,  paidStatus: 9, daysSince: 10,
   batchRef:   11,  roe:       12,  entryDate: 13,
   actualUsd:  14,  actualSender: 15, paidDate: 16, clientId: 17, loggedBy: 18,
-  currency:   19,  screenshotUrl: 20
+  currency:   19,  screenshotUrl: 20, partyFeePct: 21
 };
+
+// Payments logged on/after this date with no screenshot get flagged in the app.
+const SCREENSHOT_FLAG_FROM = '2026-10-21';
 
 // Drive folder where logged payment screenshots are stored. Left blank →
 // the backend lazily creates / reuses a folder named SCREENSHOT_FOLDER_NAME.
@@ -83,8 +86,14 @@ function doGet(e) {
         ok: true,
         username: session.username,
         role:     session.role,
-        clientId: session.clientId
+        clientId: session.clientId,
+        partyName: session.partyName || ''
       });
+    }
+
+    // Parties see only their own dashboard — nothing else is readable.
+    if (session.role === 'party' && action !== 'dashboard') {
+      return jsonResponse({ ok: false, error: 'Forbidden' });
     }
 
     if (action === 'dashboard') {
@@ -108,6 +117,14 @@ function doGet(e) {
         ? String((e.parameter && e.parameter.clientId) || '').trim()
         : session.clientId;
       return jsonResponse({ ok: true, parties: listParties_(cid) });
+    }
+
+    // Same list with each party's fee % and login status (client/admin only).
+    if (action === 'parties.detail') {
+      const cid = session.role === 'admin'
+        ? String((e.parameter && e.parameter.clientId) || '').trim()
+        : session.clientId;
+      return jsonResponse({ ok: true, parties: listPartiesDetail_(cid) });
     }
 
     return jsonResponse({ ok: false, error: 'Unknown action: ' + action });
@@ -138,10 +155,17 @@ function doPost(e) {
     if (action === 'changePassword') return handleChangePassword_(data, session);
     if (action === 'logPayment')    return handleLogPayment_(data, session);
 
+    // A party login can only log its own payments and manage its own login.
+    if (session.role === 'party') return jsonResponse({ ok: false, error: 'Forbidden' });
+
     // Party management — a client manages their own list; an admin may
     // manage a given client's list by passing clientId. Allowed for both.
     if (action === 'parties.add')    return handleAddParty_(data, session);
     if (action === 'parties.remove') return handleRemoveParty_(data, session);
+    if (action === 'parties.setFee')       return handleSetPartyFee_(data, session);
+    if (action === 'parties.createLogin')  return handleCreatePartyLogin_(data, session);
+    if (action === 'parties.resetLogin')   return handleResetPartyLogin_(data, session);
+    if (action === 'parties.setLoginActive') return handleSetPartyLoginActive_(data, session);
 
     // ---- Admin-only ----
     if (session.role !== 'admin') return jsonResponse({ ok: false, error: 'Forbidden' });
@@ -201,6 +225,7 @@ function handleLogin_(data) {
     username: user.username,
     role: user.role,
     clientId: user.clientId,
+    partyName: user.partyName || '',
     expiresAt: Date.now() + SESSION_TTL_MS
   });
 }
@@ -235,6 +260,7 @@ function createSession_(user) {
     username:  user.username,
     role:      user.role,
     clientId:  user.clientId,
+    partyName: user.partyName || '',
     createdAt: Date.now(),
     expiresAt: Date.now() + SESSION_TTL_MS
   };
@@ -311,13 +337,14 @@ function getUsersSheet_() {
   let sheet = ss.getSheetByName(USERS_SHEET);
   if (!sheet) {
     sheet = ss.insertSheet(USERS_SHEET);
-    sheet.getRange(1, 1, 1, 7).setValues([
-      ['username', 'passwordHash', 'salt', 'role', 'clientId', 'active', 'createdAt']
+    sheet.getRange(1, 1, 1, 8).setValues([
+      ['username', 'passwordHash', 'salt', 'role', 'clientId', 'active', 'createdAt', 'partyName']
     ]);
     sheet.setFrozenRows(1);
     sheet.setColumnWidth(2, 320);
     sheet.setColumnWidth(3, 220);
   }
+  ensureColumnHeader_(sheet, 8, 'partyName');   // older tabs stop at column G
   return sheet;
 }
 
@@ -326,7 +353,7 @@ function findUser_(username) {
   const last = sheet.getLastRow();
   if (last < 2) return null;
   const u = normUsername_(username);
-  const values = sheet.getRange(2, 1, last - 1, 7).getValues();
+  const values = sheet.getRange(2, 1, last - 1, 8).getValues();
   for (let i = 0; i < values.length; i++) {
     const r = values[i];
     if (normUsername_(r[0]) === u) {
@@ -338,7 +365,8 @@ function findUser_(username) {
         role: String(r[3]),
         clientId: String(r[4] || ''),
         active: toBool_(r[5]),
-        createdAt: r[6]
+        createdAt: r[6],
+        partyName: String(r[7] || '')
       };
     }
   }
@@ -349,11 +377,12 @@ function listUsers_() {
   const sheet = getUsersSheet_();
   const last = sheet.getLastRow();
   if (last < 2) return [];
-  const values = sheet.getRange(2, 1, last - 1, 7).getValues();
+  const values = sheet.getRange(2, 1, last - 1, 8).getValues();
   return values.map((r) => ({
     username: String(r[0] || ''),
     role: String(r[3] || ''),
     clientId: String(r[4] || ''),
+    partyName: String(r[7] || ''),
     active: toBool_(r[5]),
     createdAt: r[6] instanceof Date
       ? Utilities.formatDate(r[6], SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone(), 'yyyy-MM-dd')
@@ -380,10 +409,12 @@ function getPartiesSheet_() {
   let sheet = ss.getSheetByName(PARTIES_SHEET);
   if (!sheet) {
     sheet = ss.insertSheet(PARTIES_SHEET);
-    sheet.getRange(1, 1, 1, 4).setValues([['clientId', 'party', 'active', 'createdAt']]);
+    sheet.getRange(1, 1, 1, 6).setValues([['clientId', 'party', 'active', 'createdAt', 'feePct', 'username']]);
     sheet.setFrozenRows(1);
     sheet.setColumnWidth(2, 260);
   }
+  ensureColumnHeader_(sheet, 5, 'feePct');     // the client's % charged to this party
+  ensureColumnHeader_(sheet, 6, 'username');   // the party's login, if one was created
   return sheet;
 }
 
@@ -410,6 +441,183 @@ function listParties_(clientId) {
   return out;
 }
 
+
+// "10" or 10 -> 0.1. Returns '' for blank, null for invalid.
+function parsePctInput_(v) {
+  if (v === undefined || v === null || String(v).trim() === '') return '';
+  const n = parseFloat(String(v).replace('%', ''));
+  if (isNaN(n) || n < 0 || n >= 100) return null;
+  return Math.round(n * 100) / 10000;
+}
+
+// Row index (1-based) + record of one active-or-not party, or null.
+function findParty_(clientId, partyName) {
+  const cid = String(clientId || '').trim();
+  const name = String(partyName || '').trim().toLowerCase();
+  if (!cid || !name) return null;
+  const sheet = getPartiesSheet_();
+  const last = sheet.getLastRow();
+  if (last < 2) return null;
+  const values = sheet.getRange(2, 1, last - 1, 6).getValues();
+  for (let i = 0; i < values.length; i++) {
+    const r = values[i];
+    if (String(r[0]).trim() === cid && String(r[1]).trim().toLowerCase() === name) {
+      return {
+        row: i + 2, party: String(r[1]).trim(), active: toBool_(r[2]),
+        feePct: isNumeric_(r[4]) ? r[4] : '', username: String(r[5] || '')
+      };
+    }
+  }
+  return null;
+}
+
+// Fee fraction stamped on a payment at logging time, or '' if unknown.
+function lookupPartyFee_(clientId, partyName) {
+  const p = findParty_(clientId, partyName);
+  return p && p.feePct !== '' ? p.feePct : '';
+}
+
+// Active parties for one client with fee % and login status.
+function listPartiesDetail_(clientId) {
+  const cid = String(clientId || '').trim();
+  if (!cid) return [];
+  const sheet = getPartiesSheet_();
+  const last = sheet.getLastRow();
+  if (last < 2) return [];
+  const activeByName = {};
+  listUsers_().forEach((u) => { activeByName[normUsername_(u.username)] = u.active; });
+  const seen = {};
+  const out = [];
+  sheet.getRange(2, 1, last - 1, 6).getValues().forEach((r) => {
+    const party = String(r[1] || '').trim();
+    if (String(r[0]).trim() !== cid || !toBool_(r[2]) || !party) return;
+    const k = party.toLowerCase();
+    if (seen[k]) return;
+    seen[k] = true;
+    const username = String(r[5] || '');
+    out.push({
+      party: party,
+      feePct: isNumeric_(r[4]) ? r[4] : '',
+      username: username,
+      loginActive: username ? !!activeByName[normUsername_(username)] : false
+    });
+  });
+  out.sort((a, b) => (a.party.toLowerCase() < b.party.toLowerCase() ? -1 : 1));
+  return out;
+}
+
+function partyResponse_(cid, extra) {
+  return jsonResponse(Object.assign({
+    ok: true, parties: listParties_(cid), partiesDetail: listPartiesDetail_(cid)
+  }, extra || {}));
+}
+
+function randomPassword_() {
+  const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';   // no look-alikes
+  const hex = Utilities.getUuid().replace(/-/g, '');
+  let out = '';
+  for (let i = 0; i < 10; i++) out += alphabet[parseInt(hex.substr(i * 2, 2), 16) % alphabet.length];
+  return out;
+}
+
+function uniqueUsernameFor_(party) {
+  const base = party.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 14) || 'party';
+  for (let i = 0; i < 20; i++) {
+    const cand = base + String(Math.floor(100 + Math.random() * 900));
+    if (!findUser_(cand)) return cand;
+  }
+  return base + Utilities.getUuid().slice(0, 6);
+}
+
+/**
+ * Fill the fee % on this party's earlier payments that have none yet.
+ * Never overwrites a % already stamped, so history stays as it was.
+ */
+function backfillPartyFee_(clientId, partyName, fee) {
+  if (fee === '' || fee === null) return;
+  let lock = null;
+  try {
+    try { lock = LockService.getScriptLock(); lock.waitLock(10000); } catch (e) { lock = null; }
+    const sheet = getPaymentsSheetOrThrow_();
+    ensureColumnHeader_(sheet, COL.partyFeePct, 'partyFeePct');
+    const last = sheet.getLastRow();
+    if (last < 2) return;
+    const n = last - 1;
+    const names = sheet.getRange(2, COL.clientName, n, 1).getValues();
+    const ids   = sheet.getRange(2, COL.clientId,   n, 1).getValues();
+    const fees  = sheet.getRange(2, COL.partyFeePct, n, 1).getValues();
+    const want = String(partyName).trim().toLowerCase();
+    let touched = 0;
+    for (let i = 0; i < n; i++) {
+      if (String(ids[i][0]).trim() === clientId &&
+          String(names[i][0]).trim().toLowerCase() === want &&
+          fees[i][0] === '') {
+        fees[i][0] = fee; touched++;
+      }
+    }
+    if (touched) {
+      const rng = sheet.getRange(2, COL.partyFeePct, n, 1);
+      rng.setValues(fees).setNumberFormat('0.00%');
+      bustDashboardCache_({ clientId: clientId });
+    }
+  } catch (err) {
+    console.error('backfillPartyFee_ failed: ' + err);
+  } finally {
+    if (lock) { try { lock.releaseLock(); } catch (e) { /* ignore */ } }
+  }
+}
+
+function handleSetPartyFee_(data, session) {
+  const cid = partyClientId_(data, session);
+  const p = findParty_(cid, data.party);
+  if (!p) return jsonResponse({ ok: false, error: 'Party not found' });
+  const fee = parsePctInput_(data.feePct);
+  if (fee === null) return jsonResponse({ ok: false, error: 'Fee % must be between 0 and 99.99' });
+  getPartiesSheet_().getRange(p.row, 5).setValue(fee);
+  backfillPartyFee_(cid, p.party, fee);
+  bustDashboardCache_({ clientId: cid });
+  return partyResponse_(cid);
+}
+
+function handleCreatePartyLogin_(data, session) {
+  const cid = partyClientId_(data, session);
+  const p = findParty_(cid, data.party);
+  if (!p || !p.active) return jsonResponse({ ok: false, error: 'Party not found' });
+  if (p.username) return jsonResponse({ ok: false, error: 'This party already has a login — reset the password instead.' });
+
+  const username = uniqueUsernameFor_(p.party);
+  const password = randomPassword_();
+  const salt = generateSalt_();
+  getUsersSheet_().appendRow([username, hashPassword_(password, salt), salt, 'party', cid, true, new Date(), p.party]);
+  getPartiesSheet_().getRange(p.row, 6).setValue(username);
+  return partyResponse_(cid, { credentials: { party: p.party, username: username, password: password } });
+}
+
+function handleResetPartyLogin_(data, session) {
+  const cid = partyClientId_(data, session);
+  const p = findParty_(cid, data.party);
+  if (!p || !p.username) return jsonResponse({ ok: false, error: 'This party has no login yet' });
+  const user = findUser_(p.username);
+  if (!user || user.role !== 'party' || user.clientId !== cid) return jsonResponse({ ok: false, error: 'Login not found' });
+  const password = randomPassword_();
+  setUserPassword_(user, password);
+  getUsersSheet_().getRange(user.row, 6).setValue(true);
+  invalidateSessionsForUser_(user.username);
+  return partyResponse_(cid, { credentials: { party: p.party, username: user.username, password: password } });
+}
+
+function handleSetPartyLoginActive_(data, session) {
+  const cid = partyClientId_(data, session);
+  const p = findParty_(cid, data.party);
+  if (!p || !p.username) return jsonResponse({ ok: false, error: 'This party has no login yet' });
+  const user = findUser_(p.username);
+  if (!user || user.role !== 'party' || user.clientId !== cid) return jsonResponse({ ok: false, error: 'Login not found' });
+  const on = toBool_(data.active);
+  getUsersSheet_().getRange(user.row, 6).setValue(on);
+  if (!on) invalidateSessionsForUser_(user.username);
+  return partyResponse_(cid);
+}
+
 // Resolve which clientId a party action targets: admins act on the passed
 // clientId (logging on behalf), clients act on their own.
 function partyClientId_(data, session) {
@@ -425,6 +633,9 @@ function handleAddParty_(data, session) {
   if (!party) return jsonResponse({ ok: false, error: 'Party name required' });
   if (party.length > 80) return jsonResponse({ ok: false, error: 'Party name too long (max 80)' });
 
+  const fee = parsePctInput_(data.feePct);
+  if (fee === null) return jsonResponse({ ok: false, error: 'Fee % must be between 0 and 99.99' });
+
   const sheet = getPartiesSheet_();
   const last = sheet.getLastRow();
   if (last >= 2) {
@@ -434,12 +645,14 @@ function handleAddParty_(data, session) {
           String(values[i][1]).trim().toLowerCase() === party.toLowerCase()) {
         // Already exists (maybe removed earlier) — just re-activate it.
         sheet.getRange(i + 2, 3).setValue(true);
-        return jsonResponse({ ok: true, parties: listParties_(cid) });
+        if (fee !== '') { sheet.getRange(i + 2, 5).setValue(fee); backfillPartyFee_(cid, party, fee); }
+        return partyResponse_(cid);
       }
     }
   }
-  sheet.appendRow([cid, party, true, new Date()]);
-  return jsonResponse({ ok: true, parties: listParties_(cid) });
+  sheet.appendRow([cid, party, true, new Date(), fee, '']);
+  backfillPartyFee_(cid, party, fee);
+  return partyResponse_(cid);
 }
 
 function handleRemoveParty_(data, session) {
@@ -459,7 +672,13 @@ function handleRemoveParty_(data, session) {
       }
     }
   }
-  return jsonResponse({ ok: true, parties: listParties_(cid) });
+  // A removed party must not be able to sign in any more.
+  const gone = findParty_(cid, party);
+  if (gone && gone.username) {
+    const u = findUser_(gone.username);
+    if (u) { getUsersSheet_().getRange(u.row, 6).setValue(false); invalidateSessionsForUser_(u.username); }
+  }
+  return partyResponse_(cid);
 }
 
 function handleAddUser_(data) {
@@ -563,6 +782,12 @@ function toBool_(v) {
 // ============================================
 
 function handleLogPayment_(data, session) {
+  // A party logs under its own name and can never mark a receipt Confirmed —
+  // that is the admin's call after matching against the account sheet.
+  if (session.role === 'party') {
+    data.receipt = 'Pending';
+    data.clientName = session.partyName;
+  }
   const required = ['paymentDate', 'usdAmount', 'account', 'receipt'];
   for (const field of required) {
     if (!data[field] && data[field] !== 0) {
@@ -604,7 +829,11 @@ function handleLogPayment_(data, session) {
   //   - admin role:  must pass clientId in the payload (logging on behalf
   //                  of a specific client) and a sender/client name.
   let clientName, clientId;
-  if (session.role === 'client') {
+  if (session.role === 'party') {
+    clientId   = session.clientId;
+    clientName = String(session.partyName || '').trim();
+    if (!clientName) return jsonResponse({ ok: false, error: 'This login has no party name' });
+  } else if (session.role === 'client') {
     clientId   = session.clientId;
     const typedVendor = data.clientName ? String(data.clientName).trim() : '';
     clientName = typedVendor || session.username;
@@ -644,15 +873,21 @@ function handleLogPayment_(data, session) {
   sheet.getRange(targetRow, COL.clientId).setValue(clientId);
   sheet.getRange(targetRow, COL.loggedBy).setValue(session.username);
 
+  // Freeze the party's fee % on the payment so later rate changes never
+  // rewrite history. Blank when the name isn't a saved party or has no %.
+  const feeAtLog = lookupPartyFee_(clientId, clientName);
+  if (feeAtLog !== '') sheet.getRange(targetRow, COL.partyFeePct).setValue(feeAtLog);
+
   // Currency the amount was received in (recorded only — no conversion).
   const currency = (String(data.currency || 'USD').trim().toUpperCase()) || 'USD';
   sheet.getRange(targetRow, COL.currency).setValue(currency);
 
   // Optional payment screenshot — saved to Drive, link stored in the row.
+  let screenshotSaved = false;
   if (data.screenshot) {
     try {
       const url = saveScreenshot_(data.screenshot, clientName, paymentDate);
-      if (url) sheet.getRange(targetRow, COL.screenshotUrl).setValue(url);
+      if (url) { sheet.getRange(targetRow, COL.screenshotUrl).setValue(url); screenshotSaved = true; }
     } catch (err) {
       // Non-fatal: never block logging a payment because an image failed.
       console.error('Screenshot save failed: ' + err);
@@ -668,6 +903,7 @@ function handleLogPayment_(data, session) {
   return jsonResponse({
     ok: true,
     row: targetRow,
+    missingScreenshot: !screenshotSaved,
     message: 'Logged $' + usdAmount.toFixed(2) + ' from ' + clientName + ' via ' + data.account
   });
 }
@@ -825,6 +1061,7 @@ function ensureLoggedByColumn_(sheet) {
   ensureColumnHeader_(sheet, COL.loggedBy, 'loggedBy');
   ensureColumnHeader_(sheet, COL.currency, 'currency');
   ensureColumnHeader_(sheet, COL.screenshotUrl, 'screenshotUrl');
+  ensureColumnHeader_(sheet, COL.partyFeePct, 'partyFeePct');
 }
 
 /**
@@ -869,7 +1106,7 @@ function readFilledRows_() {
   if (maxRows < 2) return [];
 
   const maxCols = sheet.getMaxColumns();
-  const readCols = Math.max(13, Math.min(20, maxCols));
+  const readCols = Math.max(13, Math.min(21, maxCols));
 
   const values = sheet.getRange(2, 1, maxRows - 1, readCols).getValues();
   const rows = [];
@@ -898,7 +1135,8 @@ function readFilledRows_() {
       clientId:         readCols >= 17 ? String(r[16] || '') : '',
       loggedBy:         readCols >= 18 ? String(r[17] || '') : '',
       currency:         readCols >= 19 ? String(r[18] || '') : '',
-      screenshotUrl:    readCols >= 20 ? String(r[19] || '') : ''
+      screenshotUrl:    readCols >= 20 ? String(r[19] || '') : '',
+      partyFeePct:      readCols >= 21 ? r[20] : ''
     });
   }
   return rows;
@@ -909,6 +1147,7 @@ function isNumeric_(v) {
 }
 
 function getDashboardCached_(session) {
+  if (session.role === 'party') return buildDashboard_(session);   // per-party view, not cached
   const cache = CacheService.getScriptCache();
   const key = session.role === 'admin'
     ? 'dashboard_admin'
@@ -924,7 +1163,13 @@ function buildDashboard_(session) {
   let rows = readFilledRows_();
   if (session.role === 'client') {
     rows = rows.filter((r) => r.clientId === session.clientId);
+  } else if (session.role === 'party') {
+    const mine = String(session.partyName || '').trim().toLowerCase();
+    rows = rows
+      .filter((r) => r.clientId === session.clientId && String(r.clientName || '').trim().toLowerCase() === mine)
+      .map(partyView_);
   }
+  const role = session.role;
 
   const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
   const thisMonth = Utilities.formatDate(new Date(), tz, 'yyyy-MM');
@@ -1016,14 +1261,14 @@ function buildDashboard_(session) {
       pendingReceiptsCount: pendingReceiptsCount,
       totalEntries: rows.length
     },
-    alerts: alerts.map(serializeEntry_),
+    alerts: alerts.map((r) => serializeEntry_(r, role)),
     months: months,
-    payouts: buildPayouts_(rows),
-    allEntries: allEntries.map(serializeEntry_)
+    payouts: role === 'party' ? [] : buildPayouts_(rows, role),
+    allEntries: allEntries.map((r) => serializeEntry_(r, role))
   };
 }
 
-function buildPayouts_(rows) {
+function buildPayouts_(rows, role) {
   const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
   const buckets = {};
 
@@ -1072,7 +1317,7 @@ function buildPayouts_(rows) {
       count: b.count,
       totalUSD: round2_(b.totalUSD),
       totalFinalPKR: round2_(b.totalFinalPKR),
-      entries: b.entries.map(serializeEntry_)
+      entries: b.entries.map((r) => serializeEntry_(r, role))
     };
   });
 
@@ -1087,9 +1332,30 @@ function buildPayouts_(rows) {
   return result;
 }
 
-function serializeEntry_(r) {
+/**
+ * What a party is allowed to know about a row. The admin's fee to the
+ * client (column G) and the final PKR owed to the client (column H) are
+ * replaced by the party's own numbers, so nothing here can be used to work
+ * out anyone else's percentage.
+ */
+function partyView_(r) {
+  const v = Object.assign({}, r);
+  const pp = isNumeric_(r.partyFeePct) ? r.partyFeePct : '';
+  const gross = isNumeric_(r.pkrAmount) && isNumeric_(r.roe) && r.roe > 0 ? r.pkrAmount : '';
+  v.finalPKR = (gross !== '' && pp !== '') ? round2_(gross * (1 - pp)) : '';   // net to the party
+  v.feePct = '';
+  v.batchRef = '';
+  v.actualSenderName = '';
+  return v;
+}
+
+function serializeEntry_(r, role) {
   const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
-  return {
+  const roeSet = isNumeric_(r.roe) && r.roe > 0;
+  const gross  = roeSet && isNumeric_(r.pkrAmount) ? r.pkrAmount : '';
+  const pp     = isNumeric_(r.partyFeePct) ? r.partyFeePct : '';
+  const entryTs = r.entryDate instanceof Date ? r.entryDate.getTime() : 0;
+  const out = {
     row: r.row,
     paymentDate: r.paymentDate instanceof Date
       ? Utilities.formatDate(r.paymentDate, tz, 'yyyy-MM-dd') : '',
@@ -1113,8 +1379,28 @@ function serializeEntry_(r) {
     clientId: r.clientId || '',
     loggedBy: r.loggedBy || '',
     currency: r.currency || 'USD',
-    screenshotUrl: r.screenshotUrl || ''
+    screenshotUrl: r.screenshotUrl || '',
+    partyFeePct: pp,
+    // Logged after the rule started, not a "never arrived" claim, and no image.
+    noScreenshot: !r.screenshotUrl && r.receipt !== 'Not Received' &&
+                  entryTs >= new Date(SCREENSHOT_FLAG_FROM + 'T00:00:00').getTime()
   };
+
+  if (role === 'party') {
+    // finalPKR already holds the party's net (see partyView_).
+    out.partyFeeAmount = (gross !== '' && pp !== '') ? round2_(gross * pp) : '';
+    out.netToParty = out.finalPKR;
+    out.clientId = '';
+  } else {
+    // Admin and client: split the gross into party fee / net to party and
+    // the client's own profit (what the admin pays them, minus what they
+    // pass on to the party).
+    out.partyFeeAmount = (gross !== '' && pp !== '') ? round2_(gross * pp) : '';
+    out.netToParty     = (gross !== '' && pp !== '') ? round2_(gross * (1 - pp)) : '';
+    out.clientProfit   = (out.netToParty !== '' && isNumeric_(r.finalPKR))
+      ? round2_(r.finalPKR - out.netToParty) : '';
+  }
+  return out;
 }
 
 function round2_(n) {
@@ -1248,6 +1534,9 @@ function applyHeaderFormatting_(sheet) {
 function applyDataRangeFormatting_(sheet, startRow, numRows) {
   if (numRows <= 0 || startRow < 2) return;
   const full = sheet.getRange(startRow, 1, numRows, COL.loggedBy);
+  if (sheet.getMaxColumns() >= COL.partyFeePct) {
+    sheet.getRange(startRow, COL.partyFeePct, numRows).setNumberFormat('0.00%');
+  }
   full.setFontFamily(SHEET_FORMAT.font)
       .setFontSize(SHEET_FORMAT.bodySize)
       .setFontColor(SHEET_FORMAT.bodyText)
