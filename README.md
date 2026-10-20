@@ -80,6 +80,7 @@ payment marked **Paid** gets one row there with the commission on it:
   Edit a row's own "My Commission %" cell to override just that row.
 - Marking a payment unpaid again removes its row. Editing ROE, fee or the
   actual amount refreshes it.
+- Menu **My Hisaab > Refresh from Payments Log** rebuilds the tab on demand.
 - Pick a month in the **Select month** dropdown (H1) to see that month's commission and payment count.
 - It lives in the sheet only; the PWA never shows it.
 - Rows are dated by the paid date (Payments Log column P); if that is empty, by the received date (column A).
