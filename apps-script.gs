@@ -1471,7 +1471,7 @@ function backfillMyHisaab() {
   if (!fresh.length) { Logger.log('Nothing to backfill.'); return; }
 
   fresh.sort(function (a, b) { return a.paid - b.paid; });
-  const start = Math.max(hs.getLastRow() + 1, HISAAB_FIRST_ROW);
+  const start = hisaabLastRow_(hs) + 1;
   const out = fresh.map(function (f, i) { return buildHisaabRow_(f.r, start + i, rate); });
   hs.getRange(start, 1, out.length, HISAAB_HEADERS.length).setValues(out);
   applyHisaabFormatting_(hs, start, out.length);
@@ -1507,7 +1507,7 @@ function rebuildMyHisaab() {
   }
   fresh.sort(function (a, b) { return a.date - b.date; });
 
-  const oldLast = hs.getLastRow();
+  const oldLast = hisaabLastRow_(hs);
   if (oldLast >= HISAAB_FIRST_ROW) {
     hs.getRange(HISAAB_FIRST_ROW, 1, oldLast - HISAAB_FIRST_ROW + 1, HISAAB_HEADERS.length).clearContent();
   }
@@ -1555,7 +1555,7 @@ function syncHisaabRow_(paymentsSheet, rowN) {
       hs.getRange(found, HC.finalPkr, 1, 3).setValues([v.slice(HC.finalPkr - 1)]);
       applyHisaabFormatting_(hs, found, 1);
     } else {
-      const n = Math.max(hs.getLastRow() + 1, HISAAB_FIRST_ROW);
+      const n = hisaabLastRow_(hs) + 1;
       hs.getRange(n, 1, 1, HISAAB_HEADERS.length)
         .setValues([buildHisaabRow_(r, n, readHisaabRate_(hs))]);
       applyHisaabFormatting_(hs, n, 1);
@@ -1596,10 +1596,17 @@ function readHisaabRate_(hs) {
 
 /** Keys of all data rows, in sheet order (index 0 = first data row). */
 function hisaabKeys_(hs) {
-  const last = hs.getLastRow();
-  if (last < HISAAB_FIRST_ROW) return [];
-  return hs.getRange(HISAAB_FIRST_ROW, HC.key, last - HISAAB_FIRST_ROW + 1, 1)
-           .getValues().map(function (x) { return String(x[0]); });
+  const n = hs.getMaxRows() - HISAAB_FIRST_ROW + 1;
+  if (n < 1) return [];
+  const keys = hs.getRange(HISAAB_FIRST_ROW, HC.key, n, 1).getValues()
+                 .map(function (x) { return String(x[0]); });
+  while (keys.length && keys[keys.length - 1] === '') keys.pop();
+  return keys;
+}
+
+/** Last row holding a payment (measured on the Key column, so the month list doesn't count). */
+function hisaabLastRow_(hs) {
+  return HISAAB_FIRST_ROW - 1 + hisaabKeys_(hs).length;
 }
 
 /** One full My Hisaab row (values + formulas) for sheet row n. */
@@ -1623,10 +1630,53 @@ function buildHisaabRow_(r, n, rate) {
   ];
 }
 
+/**
+ * Month picker in the header: pick a month in H1 and H2/H3 show the
+ * commission and payment count for it. The dropdown list is built from the
+ * paid dates in column A and lives in column O (grey, off to the side).
+ * Idempotent; added automatically to an existing tab on next use.
+ */
+function addMonthPicker_(hs) {
+  const F = HISAAB_FIRST_ROW;
+  const sel = 'DATE(LEFT($H$1,4),MID($H$1,6,2),1)';
+  const crit = 'A' + F + ':A,">="&' + sel + ',A' + F + ':A,"<"&EDATE(' + sel + ',1)';
+
+  hs.getRange('G1').setValue('Select month').setFontWeight('bold');
+  hs.getRange('G2').setValue('Commission').setFontWeight('bold');
+  hs.getRange('G3').setValue('Payments').setFontWeight('bold');
+
+  const pick = hs.getRange('H1');
+  if (pick.getValue() === '') {
+    pick.setNumberFormat('@').setValue(Utilities.formatDate(
+      new Date(), SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone(), 'yyyy-MM'));
+  }
+  pick.setBackground('#FFF8DC').setFontWeight('bold').setHorizontalAlignment('left')
+      .setDataValidation(SpreadsheetApp.newDataValidation()
+        .requireValueInRange(hs.getRange('O' + F + ':O'), true)
+        .setAllowInvalid(true).build());
+
+  hs.getRange('H2').setFormula('=IF($H$1="","",SUMIFS(I' + F + ':I,' + crit + '))')
+    .setNumberFormat('"₨"#,##0.00').setFontWeight('bold').setHorizontalAlignment('left');
+  hs.getRange('H3').setFormula('=IF($H$1="","",COUNTIFS(' + crit + '))')
+    .setHorizontalAlignment('left');
+
+  hs.getRange('O' + HISAAB_HEADER_ROW).setValue('Months (for dropdown)')
+    .setFontColor('#9CA3AF').setFontStyle('italic');
+  hs.getRange('O' + F).setFormula(
+    '=IFERROR(ARRAYFORMULA(TEXT(SORT(UNIQUE(ARRAYFORMULA(DATE(YEAR(FILTER(A' + F + ':A,A' + F + ':A<>"")),' +
+    'MONTH(FILTER(A' + F + ':A,A' + F + ':A<>"")),1))),1,FALSE),"yyyy-mm")),"")'
+  ).setFontColor('#9CA3AF');
+  hs.getRange('G1:H3').setFontFamily(SHEET_FORMAT.font).setFontSize(SHEET_FORMAT.bodySize);
+  hs.setColumnWidth(7, 110); hs.setColumnWidth(8, 130); hs.setColumnWidth(15, 130);
+}
+
 function getHisaabSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let hs = ss.getSheetByName(HISAAB_SHEET);
-  if (hs) return hs;
+  if (hs) {
+    if (hs.getRange('G1').getValue() === '') addMonthPicker_(hs);
+    return hs;
+  }
 
   hs = ss.insertSheet(HISAAB_SHEET);
   const H = SHEET_FORMAT;
@@ -1657,6 +1707,7 @@ function getHisaabSheet_() {
   });
   hs.getRange(HISAAB_FIRST_ROW, HC.key, hs.getMaxRows() - HISAAB_FIRST_ROW + 1, 1)
     .setNumberFormat('@').setFontColor('#9CA3AF');
+  addMonthPicker_(hs);
   return hs;
 }
 
