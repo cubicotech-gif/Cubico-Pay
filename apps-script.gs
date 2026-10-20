@@ -43,7 +43,8 @@ const SESSION_PREFIX  = 'session_';
 const SESSION_TTL_MS  = 24 * 60 * 60 * 1000;   // 24h sliding expiry
 const LOGIN_MAX_FAILS = 5;
 const LOGIN_WINDOW_S  = 15 * 60;               // 15 minutes
-const CACHE_TTL_S     = 30;                    // dashboard cache lifetime
+const CACHE_TTL_S     = 30;                    // (legacy) dashboard cache lifetime
+const ROWS_CACHE_TTL_S = 600;                  // raw-rows cache; busted on every write
 
 // Column map for "Payments Log" — 1-based, matches the sheet.
 const COL = {
@@ -336,6 +337,14 @@ function normUsername_(u) {
 // USERS TAB
 // ============================================
 
+/** Run a one-off schema check at most once an hour (header checks cost several API calls). */
+function schemaOnce_(flag, fn) {
+  const cache = CacheService.getScriptCache();
+  if (cache.get(flag)) return;
+  fn();
+  try { cache.put(flag, '1', 3600); } catch (e) { /* non-fatal */ }
+}
+
 function getUsersSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(USERS_SHEET);
@@ -348,7 +357,7 @@ function getUsersSheet_() {
     sheet.setColumnWidth(2, 320);
     sheet.setColumnWidth(3, 220);
   }
-  ensureColumnHeader_(sheet, 8, 'partyName');   // older tabs stop at column G
+  schemaOnce_('schema_users_v1', () => ensureColumnHeader_(sheet, 8, 'partyName'));   // older tabs stop at column G
   return sheet;
 }
 
@@ -417,8 +426,10 @@ function getPartiesSheet_() {
     sheet.setFrozenRows(1);
     sheet.setColumnWidth(2, 260);
   }
-  ensureColumnHeader_(sheet, 5, 'feePct');     // the client's % charged to this party
-  ensureColumnHeader_(sheet, 6, 'username');   // the party's login, if one was created
+  schemaOnce_('schema_parties_v1', () => {
+    ensureColumnHeader_(sheet, 5, 'feePct');     // the client's % charged to this party
+    ensureColumnHeader_(sheet, 6, 'username');   // the party's login, if one was created
+  });
   return sheet;
 }
 
@@ -1039,9 +1050,15 @@ function handleLogPayment_(data, session) {
     }
   }
 
-  // Apply the full standard formatting in one pass — supersedes the
-  // per-cell setNumberFormat calls that used to live here.
-  applyDataRangeFormatting_(sheet, targetRow, 1);
+  // The new row sits above an already-standard row, so copy its look in a
+  // single call (cheaper than re-styling every cell).
+  try {
+    const w = Math.min(sheet.getMaxColumns(), COL.partyPayRef);
+    sheet.getRange(tplRow, 1, 1, w)
+         .copyTo(sheet.getRange(targetRow, 1, 1, w), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+  } catch (e) {
+    applyDataRangeFormatting_(sheet, targetRow, 1);
+  }
 
   bustDashboardCache_({ clientId: clientId });
 
@@ -1203,10 +1220,18 @@ function getPaymentsSheetOrThrow_() {
  * Idempotent — safe to call before every write.
  */
 function ensureLoggedByColumn_(sheet) {
-  ensureColumnHeader_(sheet, COL.loggedBy, 'loggedBy');
-  ensureColumnHeader_(sheet, COL.currency, 'currency');
-  ensureColumnHeader_(sheet, COL.screenshotUrl, 'screenshotUrl');
-  ensureColumnHeader_(sheet, COL.partyFeePct, 'partyFeePct');
+  const cache = CacheService.getScriptCache();
+  if (cache.get('schema_payments_v3')) return;          // verified within the last hour
+  const wanted = [
+    [COL.loggedBy, 'loggedBy'], [COL.currency, 'currency'], [COL.screenshotUrl, 'screenshotUrl'],
+    [COL.partyFeePct, 'partyFeePct'], [COL.partyPaid, 'partyPaid'],
+    [COL.partyPaidDate, 'partyPaidDate'], [COL.partyPayRef, 'partyPayRef']
+  ];
+  const top = COL.partyPayRef;
+  if (sheet.getMaxColumns() < top) sheet.insertColumnsAfter(sheet.getMaxColumns(), top - sheet.getMaxColumns());
+  const header = sheet.getRange(1, 1, 1, top).getValues()[0];
+  wanted.forEach((w) => { if (!header[w[0] - 1]) ensureColumnHeader_(sheet, w[0], w[1]); });
+  try { cache.put('schema_payments_v3', '1', 3600); } catch (e) { /* non-fatal */ }
 }
 
 /**
@@ -1253,7 +1278,15 @@ function readFilledRows_() {
   const maxCols = sheet.getMaxColumns();
   const readCols = Math.max(13, Math.min(24, maxCols));
 
-  const values = sheet.getRange(2, 1, maxRows - 1, readCols).getValues();
+  // Find the last filled row from column A first (one cheap read) so the big
+  // read below skips the hundreds of empty template rows at the bottom.
+  const colA = sheet.getRange(2, 1, maxRows - 1, 1).getValues();
+  let used = 0;
+  for (let i = colA.length - 1; i >= 0; i--) {
+    if (colA[i][0] !== '' && colA[i][0] !== null) { used = i + 1; break; }
+  }
+  if (!used) return [];
+  const values = sheet.getRange(2, 1, used, readCols).getValues();
   const rows = [];
   for (let i = 0; i < values.length; i++) {
     const r = values[i];
@@ -1295,20 +1328,74 @@ function isNumeric_(v) {
 }
 
 function getDashboardCached_(session) {
-  if (session.role === 'party') return buildDashboard_(session);   // per-party view, not cached
-  const cache = CacheService.getScriptCache();
-  const key = session.role === 'admin'
-    ? 'dashboard_admin'
-    : 'dashboard_client_' + session.clientId;
-  const cached = cache.get(key);
-  if (cached) return JSON.parse(cached);
-  const data = buildDashboard_(session);
-  try { cache.put(key, JSON.stringify(data), CACHE_TTL_S); } catch (e) { /* non-fatal */ }
-  return data;
+  // The expensive part is reading the sheet, which is the same for every
+  // role. Cache the raw rows once (compressed) and build each role's own
+  // filtered, redacted view from them in memory.
+  return buildDashboard_(session);
+}
+
+const ROWS_CACHE_KEY = 'rows_v1';
+
+/** Raw rows for the dashboard, from cache when fresh. */
+function readFilledRowsCached_() {
+  const hit = cacheGetBig_(ROWS_CACHE_KEY);
+  if (hit) return hit;
+  const rows = readFilledRows_();
+  cachePutBig_(ROWS_CACHE_KEY, rows, ROWS_CACHE_TTL_S);
+  return rows;
+}
+
+// CacheService holds at most ~100KB per key, so store the JSON gzipped and
+// base64'd, split across several keys.
+function cachePutBig_(key, obj, ttl) {
+  try {
+    const json = JSON.stringify(obj, function (k, v) {
+      return this[k] instanceof Date ? { __d: this[k].getTime() } : v;
+    });
+    const gz = Utilities.gzip(Utilities.newBlob(json, 'application/json')).getBytes();
+    const b64 = Utilities.base64Encode(gz);
+    const CH = 90000;
+    const n = Math.ceil(b64.length / CH);
+    const puts = {};
+    for (let i = 0; i < n; i++) puts[key + '_' + i] = b64.substr(i * CH, CH);
+    puts[key + '_n'] = String(n);
+    CacheService.getScriptCache().putAll(puts, ttl);
+  } catch (e) { /* caching is best-effort */ }
+}
+
+function cacheGetBig_(key) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const n = parseInt(cache.get(key + '_n') || '0', 10);
+    if (!n) return null;
+    const keys = [];
+    for (let i = 0; i < n; i++) keys.push(key + '_' + i);
+    const got = cache.getAll(keys);
+    let b64 = '';
+    for (let i = 0; i < n; i++) {
+      if (!got[keys[i]]) return null;
+      b64 += got[keys[i]];
+    }
+    const bytes = Utilities.base64Decode(b64);
+    const json = Utilities.ungzip(Utilities.newBlob(bytes, 'application/x-gzip')).getDataAsString();
+    return JSON.parse(json, function (k, v) {
+      return (v && typeof v === 'object' && v.__d !== undefined) ? new Date(v.__d) : v;
+    });
+  } catch (e) { return null; }
+}
+
+function cacheRemoveBig_(key) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const n = parseInt(cache.get(key + '_n') || '0', 10);
+    const keys = [key + '_n'];
+    for (let i = 0; i < n; i++) keys.push(key + '_' + i);
+    cache.removeAll(keys);
+  } catch (e) { /* non-fatal */ }
 }
 
 function buildDashboard_(session) {
-  let rows = readFilledRows_();
+  let rows = readFilledRowsCached_();
   if (session.role === 'client') {
     rows = rows.filter((r) => r.clientId === session.clientId);
   } else if (session.role === 'party') {
@@ -1409,7 +1496,7 @@ function buildDashboard_(session) {
       pendingReceiptsCount: pendingReceiptsCount,
       totalEntries: rows.length
     },
-    alerts: alerts.map((r) => serializeEntry_(r, role)),
+    alerts: [],   // unused by the app now; entries are sent once, in allEntries
     months: months,
     payouts: role === 'party' ? [] : buildPayouts_(rows, role),
     allEntries: allEntries.map((r) => serializeEntry_(r, role))
@@ -1465,7 +1552,7 @@ function buildPayouts_(rows, role) {
       count: b.count,
       totalUSD: round2_(b.totalUSD),
       totalFinalPKR: round2_(b.totalFinalPKR),
-      entries: b.entries.map((r) => serializeEntry_(r, role))
+      entryKeys: b.entries.map(entryKey_)   // the app looks the entries up in allEntries
     };
   });
 
@@ -1577,6 +1664,7 @@ function bustDashboardCache_(opts) {
     const cid = opts && opts.clientId;
     if (cid) cache.remove('dashboard_client_' + cid);
   } catch (e) { /* non-fatal */ }
+  cacheRemoveBig_(ROWS_CACHE_KEY);
 }
 
 function getRowClientId_(sheet, row) {
@@ -1689,32 +1777,36 @@ function applyHeaderFormatting_(sheet) {
  */
 function applyDataRangeFormatting_(sheet, startRow, numRows) {
   if (numRows <= 0 || startRow < 2) return;
-  const full = sheet.getRange(startRow, 1, numRows, COL.loggedBy);
-  if (sheet.getMaxColumns() >= COL.partyFeePct) {
-    sheet.getRange(startRow, COL.partyFeePct, numRows).setNumberFormat('0.00%');
-  }
-  if (sheet.getMaxColumns() >= COL.partyPaidDate) {
-    sheet.getRange(startRow, COL.partyPaidDate, numRows).setNumberFormat('yyyy-mm-dd');
-  }
-  full.setFontFamily(SHEET_FORMAT.font)
-      .setFontSize(SHEET_FORMAT.bodySize)
-      .setFontColor(SHEET_FORMAT.bodyText)
+  const lastCol = Math.min(sheet.getMaxColumns(), COL.partyPayRef);
+  const full = sheet.getRange(startRow, 1, numRows, lastCol);
+  // One call each for text style, background, alignment and ALL number
+  // formats — each Apps Script call costs 100ms+, so batching matters.
+  full.setTextStyle(SpreadsheetApp.newTextStyle()
+        .setFontFamily(SHEET_FORMAT.font)
+        .setFontSize(SHEET_FORMAT.bodySize)
+        .setForegroundColor(SHEET_FORMAT.bodyText)
+        .setBold(false).setItalic(false).build())
       .setBackground(SHEET_FORMAT.bodyBg)
-      .setFontWeight('normal')
-      .setFontStyle('normal')
       .setVerticalAlignment('middle')
       .setHorizontalAlignment('left');
 
-  sheet.getRange(startRow, COL.paymentDate, numRows).setNumberFormat('yyyy-mm-dd');
-  sheet.getRange(startRow, COL.usdAmount,   numRows).setNumberFormat('$#,##0.00');
-  sheet.getRange(startRow, COL.pkrAmount,   numRows).setNumberFormat('"₨"#,##0');
-  sheet.getRange(startRow, COL.feePct,      numRows).setNumberFormat('0.00%');
-  sheet.getRange(startRow, COL.finalPKR,    numRows).setNumberFormat('"₨"#,##0');
-  sheet.getRange(startRow, COL.daysSince,   numRows).setNumberFormat('0');
-  sheet.getRange(startRow, COL.roe,         numRows).setNumberFormat('0.00');
-  sheet.getRange(startRow, COL.entryDate,   numRows).setNumberFormat('yyyy-mm-dd hh:mm');
-  sheet.getRange(startRow, COL.actualUsd,   numRows).setNumberFormat('$#,##0.00');
-  sheet.getRange(startRow, COL.paidDate,    numRows).setNumberFormat('yyyy-mm-dd');
+  const fmt = new Array(lastCol).fill('General');
+  const set = (col, f) => { if (col <= lastCol) fmt[col - 1] = f; };
+  set(COL.paymentDate,   'yyyy-mm-dd');
+  set(COL.usdAmount,     '$#,##0.00');
+  set(COL.pkrAmount,     '"₨"#,##0');
+  set(COL.feePct,        '0.00%');
+  set(COL.finalPKR,      '"₨"#,##0');
+  set(COL.daysSince,     '0');
+  set(COL.roe,           '0.00');
+  set(COL.entryDate,     'yyyy-mm-dd hh:mm');
+  set(COL.actualUsd,     '$#,##0.00');
+  set(COL.paidDate,      'yyyy-mm-dd');
+  set(COL.partyFeePct,   '0.00%');
+  set(COL.partyPaidDate, 'yyyy-mm-dd');
+  const grid = [];
+  for (let i = 0; i < numRows; i++) grid.push(fmt.slice());
+  full.setNumberFormats(grid);
 }
 
 function applyColumnWidths_(sheet) {
