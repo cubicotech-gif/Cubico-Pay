@@ -86,3 +86,27 @@ payment marked **Paid** gets one row there with the commission on it:
 - Rows are dated by the paid date (Payments Log column P); if that is empty, by the received date (column A).
 - After pasting the new `apps-script.gs` and redeploying, run
   `backfillMyHisaab()` once from the editor to copy payments already marked Paid.
+
+## Parties, party logins and the fee chain
+
+Three kinds of login:
+
+| Role | Sees |
+|---|---|
+| **admin** | Everything, including the My Hisaab tab in the sheet |
+| **client** | Own payments and parties: the party % they charge, net to party, and their own profit (what the admin pays them minus what they pass on to the party) |
+| **party** | Only their own payments: gross PKR, their service fee % and what they receive. Nothing about the client's or admin's percentages |
+
+- A client adds a party and sets its fee % in the **Parties** tab, then taps
+  **Create login**. The username and password are generated and shown once.
+  Reset, disable or remove a party's login from the same card.
+- The party's % is stamped on each payment when it is logged (sheet column U,
+  `partyFeePct`), so changing the rate later never rewrites history. Setting a
+  % for the first time also fills earlier payments of that party that have none.
+- Parties log payments themselves; receipts always start as **Pending** until
+  the admin confirms them. Payments logged without a screenshot (from
+  `SCREENSHOT_FLAG_FROM` in `apps-script.gs`) are warned about and highlighted.
+- Client and admin get a **Parties** report (Reports tab) with profit per party,
+  per month.
+- After pasting the new `apps-script.gs`, redeploy. The Users, Parties and
+  Payments Log tabs gain their new columns automatically.
