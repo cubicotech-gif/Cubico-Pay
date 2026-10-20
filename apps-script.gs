@@ -1,7 +1,7 @@
 /**
  * CUBICO PAY — APPS SCRIPT BACKEND
  * ============================================
- * Last modified: 2026-05-11 (role-based auth: admin + client accounts)
+ * Last modified: 2026-10-20 (My Hisaab commission ledger)
  *
  * Receives requests from the Cubico Pay PWA. Auth is now session-based:
  * users log in with username + password; on success they get a session
@@ -14,6 +14,8 @@
  *
  * Sheet tabs used:
  *   - "Payments Log" — payment entries. Column Q now holds clientId.
+ *   - "My Hisaab"    — admin-only commission ledger, one row per Paid
+ *                      payment (sheet only, never sent to the app).
  *   - "Users"        — auth store: username, passwordHash, salt, role,
  *                      clientId, active, createdAt. Auto-created on first
  *                      bootstrapAdmin() run.
@@ -691,6 +693,7 @@ function handleConfirmEntry_(data) {
   }
 
   applyDataRangeFormatting_(sheet, row.n, 1);
+  syncHisaabRow_(sheet, row.n);
   bustDashboardCache_({ clientId: getRowClientId_(sheet, row.n) });
   return jsonResponse({ ok: true });
 }
@@ -719,6 +722,7 @@ function handleMarkPaid_(data) {
   }
 
   applyDataRangeFormatting_(sheet, row.n, 1);
+  syncHisaabRow_(sheet, row.n);
   bustDashboardCache_({ clientId: getRowClientId_(sheet, row.n) });
   return jsonResponse({ ok: true });
 }
@@ -740,6 +744,7 @@ function handleSetFinancials_(data) {
   }
 
   applyDataRangeFormatting_(sheet, row.n, 1);
+  syncHisaabRow_(sheet, row.n);
   bustDashboardCache_({ clientId: getRowClientId_(sheet, row.n) });
   return jsonResponse({ ok: true });
 }
@@ -799,6 +804,7 @@ function handleEditEntry_(data) {
   }
 
   applyDataRangeFormatting_(sheet, row.n, 1);
+  syncHisaabRow_(sheet, row.n);
   bustDashboardCache_({ clientId: getRowClientId_(sheet, row.n) });
   return jsonResponse({ ok: true });
 }
@@ -1338,6 +1344,11 @@ function onEdit(e) {
     if (overlap > 0) applyDataRangeFormatting_(sheet, firstDataRow, overlap);
   } catch (err) { /* non-fatal */ }
 
+  // Keep My Hisaab in step with manual edits (cap guards huge pastes).
+  for (let i = 0; i < Math.min(numRows, 200); i++) {
+    if (startRow + i >= 2) syncHisaabRow_(sheet, startRow + i);
+  }
+
   bustDashboardCache_();
 }
 
@@ -1394,4 +1405,229 @@ function backfillClientIds() {
   }
   range.setValues(values);
   Logger.log('Backfilled clientId on ' + touched + ' rows.');
+}
+
+// ============================================
+// MY HISAAB — admin-only commission ledger (lives in the sheet only)
+// ============================================
+//
+// Every payment marked "Paid" in Payments Log gets one row in the
+// "My Hisaab" tab. The sub-agent charges a lower fee than the one we
+// charge the client; the difference is our commission, taken on the gross
+// PKR (column F of Payments Log):
+//
+//     commission PKR = gross PKR x commission %
+//
+// The commission % is read from cell B1 of My Hisaab when a row is first
+// added and is then stored on that row, so changing B1 only affects
+// payments marked Paid afterwards. Edit a row's own H cell to override it.
+//
+// Rows are matched by a stable key (the entry timestamp), not by row
+// number, because new payments are inserted at the top of Payments Log.
+// Marking a payment unpaid again removes its My Hisaab row.
+
+const HISAAB_SHEET        = 'My Hisaab';
+const HISAAB_DEFAULT_RATE = 0.02;
+const HISAAB_HEADER_ROW   = 4;
+const HISAAB_FIRST_ROW    = 5;
+const HISAAB_HEADERS = [
+  'Paid Date', 'Client', 'USD Received', 'ROE', 'Gross PKR', 'My Fee %',
+  'Other Party %', 'My Commission %', 'Commission PKR', 'Running Total',
+  'Final PKR Paid', 'Batch Ref', 'Key'
+];
+// 1-based column numbers in My Hisaab
+const HC = { date: 1, client: 2, usd: 3, roe: 4, gross: 5, fee: 6, other: 7,
+             rate: 8, commission: 9, running: 10, finalPkr: 11, batch: 12, key: 13 };
+
+/** Run once from the editor to create the tab (also created lazily). */
+function setupMyHisaab() {
+  getHisaabSheet_();
+}
+
+/**
+ * Run once from the editor to copy every payment already marked Paid into
+ * My Hisaab. Safe to re-run: payments already listed are skipped.
+ */
+function backfillMyHisaab() {
+  const payments = getPaymentsSheetOrThrow_();
+  const hs = getHisaabSheet_();
+  const last = payments.getLastRow();
+  if (last < 2) return;
+
+  const rows = payments.getRange(2, 1, last - 1, COL.paidDate).getValues();
+  const existing = {};
+  hisaabKeys_(hs).forEach(function (k) { existing[k] = true; });
+
+  const rate = readHisaabRate_(hs);
+  const fresh = [];
+  rows.forEach(function (r) {
+    if (r[0] === '' || r[COL.paidStatus - 1] !== 'Paid') return;
+    if (!isNumeric_(r[COL.pkrAmount - 1])) return;
+    const key = hisaabKey_(r);
+    if (existing[key]) return;
+    existing[key] = true;
+    fresh.push({ r: r, paid: hisaabPaidDate_(r) });
+  });
+  if (!fresh.length) { Logger.log('Nothing to backfill.'); return; }
+
+  fresh.sort(function (a, b) { return a.paid - b.paid; });
+  const start = Math.max(hs.getLastRow() + 1, HISAAB_FIRST_ROW);
+  const out = fresh.map(function (f, i) { return buildHisaabRow_(f.r, start + i, rate); });
+  hs.getRange(start, 1, out.length, HISAAB_HEADERS.length).setValues(out);
+  applyHisaabFormatting_(hs, start, out.length);
+  Logger.log('Backfilled ' + out.length + ' paid payments into ' + HISAAB_SHEET + '.');
+}
+
+/**
+ * Bring My Hisaab in line with one Payments Log row: add/refresh it when
+ * Paid, remove it otherwise. Never throws — a Hisaab problem must not
+ * block the payment action that triggered it.
+ */
+function syncHisaabRow_(paymentsSheet, rowN) {
+  let lock = null;
+  try {
+    SpreadsheetApp.flush();
+    const r = paymentsSheet.getRange(rowN, 1, 1, COL.paidDate).getValues()[0];
+    if (r[0] === '' || r[0] === null) return;
+    const key = hisaabKey_(r);
+
+    // LockService may be unavailable inside a simple onEdit trigger.
+    try { lock = LockService.getScriptLock(); lock.waitLock(10000); } catch (e) { lock = null; }
+
+    const hs = getHisaabSheet_();
+    const keys = hisaabKeys_(hs);
+    const idx = keys.indexOf(key);
+    const found = idx === -1 ? 0 : HISAAB_FIRST_ROW + idx;
+    const isPaid = r[COL.paidStatus - 1] === 'Paid' && isNumeric_(r[COL.pkrAmount - 1]);
+
+    if (!isPaid) {
+      if (found) hs.deleteRow(found);
+      return;
+    }
+    if (found) {
+      // Refresh amounts but keep the commission % this row was stamped with.
+      const v = buildHisaabRow_(r, found, readHisaabRate_(hs));
+      hs.getRange(found, HC.date, 1, HC.fee).setValues([v.slice(0, HC.fee)]);
+      hs.getRange(found, HC.finalPkr, 1, 3).setValues([v.slice(HC.finalPkr - 1)]);
+      applyHisaabFormatting_(hs, found, 1);
+    } else {
+      const n = Math.max(hs.getLastRow() + 1, HISAAB_FIRST_ROW);
+      hs.getRange(n, 1, 1, HISAAB_HEADERS.length)
+        .setValues([buildHisaabRow_(r, n, readHisaabRate_(hs))]);
+      applyHisaabFormatting_(hs, n, 1);
+    }
+  } catch (err) {
+    console.error('My Hisaab sync failed for row ' + rowN + ': ' + err);
+  } finally {
+    if (lock) { try { lock.releaseLock(); } catch (e) { /* ignore */ } }
+  }
+}
+
+function hisaabPaidDate_(r) {
+  const d = r[COL.paidDate - 1];
+  return d instanceof Date ? d : new Date();
+}
+
+function normPct_(v) {
+  const n = Number(v);
+  if (!isFinite(n) || n < 0) return 0;
+  return n > 1 ? n / 100 : n;   // tolerate "5" typed instead of 5%
+}
+
+/** Stable identity of a payment, independent of its (shifting) row number. */
+function hisaabKey_(r) {
+  const e = r[COL.entryDate - 1];
+  if (e instanceof Date) return 'E' + Math.floor(e.getTime() / 1000);
+  const d = r[0] instanceof Date ? r[0].getTime() : String(r[0]);
+  return 'L|' + d + '|' + r[1] + '|' + r[2] + '|' + r[3];
+}
+
+function readHisaabRate_(hs) {
+  const v = hs.getRange('B1').getValue();
+  return (v === '' || v === null || !isFinite(Number(v))) ? HISAAB_DEFAULT_RATE : normPct_(v);
+}
+
+/** Keys of all data rows, in sheet order (index 0 = first data row). */
+function hisaabKeys_(hs) {
+  const last = hs.getLastRow();
+  if (last < HISAAB_FIRST_ROW) return [];
+  return hs.getRange(HISAAB_FIRST_ROW, HC.key, last - HISAAB_FIRST_ROW + 1, 1)
+           .getValues().map(function (x) { return String(x[0]); });
+}
+
+/** One full My Hisaab row (values + formulas) for sheet row n. */
+function buildHisaabRow_(r, n, rate) {
+  const actual = r[COL.actualUsd - 1];
+  const usd = isNumeric_(actual) ? actual : r[COL.usdAmount - 1];
+  return [
+    hisaabPaidDate_(r),
+    r[COL.clientName - 1],
+    usd,
+    r[COL.roe - 1],
+    r[COL.pkrAmount - 1],
+    normPct_(r[COL.feePct - 1]),
+    '=F' + n + '-H' + n,
+    rate,
+    '=E' + n + '*H' + n,
+    '=SUM(I$' + HISAAB_FIRST_ROW + ':I' + n + ')',
+    r[COL.finalPKR - 1],
+    r[COL.batchRef - 1],
+    hisaabKey_(r)
+  ];
+}
+
+function getHisaabSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let hs = ss.getSheetByName(HISAAB_SHEET);
+  if (hs) return hs;
+
+  hs = ss.insertSheet(HISAAB_SHEET);
+  const H = SHEET_FORMAT;
+  hs.getRange('A1').setValue('My commission %');
+  hs.getRange('B1').setValue(HISAAB_DEFAULT_RATE).setNumberFormat('0.00%')
+    .setBackground('#FFF8DC').setFontWeight('bold');
+  hs.getRange('C1').setValue('← change this to set the rate for payments marked Paid from now on');
+  hs.getRange('A2').setValue('Total commission');
+  hs.getRange('B2').setFormula('=SUM(I' + HISAAB_FIRST_ROW + ':I)').setNumberFormat('"₨"#,##0');
+  hs.getRange('D1').setValue('This month');
+  hs.getRange('E1').setFormula(
+    '=SUMIFS(I' + HISAAB_FIRST_ROW + ':I,A' + HISAAB_FIRST_ROW + ':A,">="&DATE(YEAR(TODAY()),MONTH(TODAY()),1))'
+  ).setNumberFormat('"₨"#,##0');
+  hs.getRange('D2').setValue('Payments');
+  hs.getRange('E2').setFormula('=COUNT(I' + HISAAB_FIRST_ROW + ':I)');
+  hs.getRange('A1:E2').setFontFamily(H.font).setFontSize(H.bodySize);
+  hs.getRange('A1:A2').setFontWeight('bold');
+  hs.getRange('D1:D2').setFontWeight('bold');
+  hs.getRange('C1').setFontColor('#6B7280').setFontStyle('italic');
+
+  hs.getRange(HISAAB_HEADER_ROW, 1, 1, HISAAB_HEADERS.length)
+    .setValues([HISAAB_HEADERS])
+    .setBackground(H.headerBg).setFontColor(H.headerText).setFontWeight('bold')
+    .setFontFamily(H.font).setFontSize(H.headerSize).setVerticalAlignment('middle');
+  hs.setFrozenRows(HISAAB_HEADER_ROW);
+  [110, 180, 110, 70, 110, 90, 110, 120, 130, 130, 130, 140, 120].forEach(function (w, i) {
+    hs.setColumnWidth(i + 1, w);
+  });
+  hs.getRange(HISAAB_FIRST_ROW, HC.key, hs.getMaxRows() - HISAAB_FIRST_ROW + 1, 1)
+    .setNumberFormat('@').setFontColor('#9CA3AF');
+  return hs;
+}
+
+function applyHisaabFormatting_(hs, startRow, numRows) {
+  if (numRows <= 0) return;
+  const H = SHEET_FORMAT;
+  hs.getRange(startRow, 1, numRows, HISAAB_HEADERS.length)
+    .setFontFamily(H.font).setFontSize(H.bodySize).setFontColor(H.bodyText)
+    .setBackground(H.bodyBg).setVerticalAlignment('middle').setHorizontalAlignment('left');
+  hs.getRange(startRow, HC.date,       numRows).setNumberFormat('yyyy-mm-dd');
+  hs.getRange(startRow, HC.usd,        numRows).setNumberFormat('$#,##0.00');
+  hs.getRange(startRow, HC.roe,        numRows).setNumberFormat('0.00');
+  hs.getRange(startRow, HC.gross,      numRows).setNumberFormat('"₨"#,##0');
+  hs.getRange(startRow, HC.fee,        numRows).setNumberFormat('0.00%');
+  hs.getRange(startRow, HC.other,      numRows).setNumberFormat('0.00%');
+  hs.getRange(startRow, HC.rate,       numRows).setNumberFormat('0.00%');
+  hs.getRange(startRow, HC.commission, numRows).setNumberFormat('"₨"#,##0.00').setFontWeight('bold');
+  hs.getRange(startRow, HC.running,    numRows).setNumberFormat('"₨"#,##0.00');
+  hs.getRange(startRow, HC.finalPkr,   numRows).setNumberFormat('"₨"#,##0');
+  hs.getRange(startRow, HC.key,        numRows).setNumberFormat('@').setFontColor('#9CA3AF');
 }

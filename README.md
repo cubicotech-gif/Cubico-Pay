@@ -67,3 +67,19 @@ Edit any file → redeploy to Vercel. The service worker version is bumped in
   (Phase 2 — adds background sync.)
 - No dashboard inside the app. To see your payments, open the spreadsheet.
   (Phase 3 — adds in-app dashboard.)
+
+## My Hisaab (admin commission ledger)
+
+The Apps Script backend keeps a **"My Hisaab"** tab in the spreadsheet. Every
+payment marked **Paid** gets one row there with the commission on it:
+
+`commission PKR = gross PKR (Payments Log column F) x commission %`
+
+- Set the commission % in cell **B1** of My Hisaab (default 2%). A row keeps the
+  % it was created with, so changing B1 only affects payments marked Paid later.
+  Edit a row's own "My Commission %" cell to override just that row.
+- Marking a payment unpaid again removes its row. Editing ROE, fee or the
+  actual amount refreshes it.
+- It lives in the sheet only; the PWA never shows it.
+- After pasting the new `apps-script.gs` and redeploying, run
+  `backfillMyHisaab()` once from the editor to copy payments already marked Paid.
