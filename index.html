@@ -1662,6 +1662,57 @@
     /* Role-gated visibility — body class toggles drive these */
     body.role-client .admin-only { display: none !important; }
     body.role-admin  .client-only { display: none !important; }
+    body.role-party  .admin-only,
+    body.role-party  .client-only,
+    body.role-party  .not-party   { display: none !important; }
+    .party-only { display: none; }
+    body.role-party .party-only { display: block; }
+
+    /* ---- Flagged payments (no screenshot) + profit chips ---- */
+    .recent-tag.noshot { background: var(--coral-soft); color: var(--coral-deep); }
+    .recent-tag.noshot .recent-tag-dot { background: var(--coral); }
+    .recent-row.no-shot { border-left: 3px solid var(--coral); }
+    .profit-chip {
+      font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600;
+      color: var(--success);
+    }
+
+    .ledger-sum-pay {
+      border: none; background: var(--success); color: #fff; font-family: inherit;
+      font-size: 12px; font-weight: 600; padding: 8px 12px; border-radius: 8px; cursor: pointer;
+      white-space: nowrap;
+    }
+    .ledger-sum-pay[hidden] { display: none; }
+    .ledger-sumbar-card .sum-actions { display: flex; gap: 8px; align-items: center; }
+    .attach-shot-btn, .undo-party-pay-btn { margin-top: 4px; }
+
+    /* ---- Parties tab (client) ---- */
+    .party-cards { display: flex; flex-direction: column; gap: 10px; }
+    .pcard {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow-sm);
+    }
+    .pcard-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+    .pcard-name { font-weight: 600; font-size: 15px; color: var(--navy); }
+    .pcard-fee { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 600; color: var(--navy); }
+    .pcard-fee.unset { color: var(--coral-deep); }
+    .pcard-login {
+      margin-top: 6px; font-family: 'JetBrains Mono', monospace; font-size: 11px;
+      color: var(--muted); letter-spacing: 0.04em;
+    }
+    .pcard-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; margin-top: 10px; }
+    .pcard-stat-key { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted-soft); }
+    .pcard-stat-val { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 600; color: var(--navy); }
+    .pcard-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+    .pcard-actions .btn { padding: 7px 12px; font-size: 12px; }
+    .pcard-actions .btn.danger { color: var(--coral-deep); }
+    .report-total {
+      background: var(--navy); color: #fff; border-radius: 12px; padding: 14px 16px; margin-bottom: 12px;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px;
+    }
+    .report-total .k { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.7; }
+    .report-total .v { font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 600; }
+    .report-total .v.big { font-size: 20px; }
 
     /* ============================================================
        ADMIN — review drawer (bottom sheet)
@@ -2309,7 +2360,7 @@
           </div>
         </div>
 
-        <div class="field">
+        <div class="field not-party">
           <div class="field-label">
             <label>Receipt confirmation</label>
             <span class="hint">Required</span>
@@ -2357,7 +2408,10 @@
 
       </form>
 
-      <div class="form-note">
+      <div class="form-note party-only">
+        <strong>What happens next:</strong> your payment is checked against the account statement. Its status (pending, confirmed, paid) and the amount you receive appear in Activity. Attach the screenshot so it can be verified quickly.
+      </div>
+      <div class="form-note not-party">
         <strong>What happens next:</strong> the entry lands in your tracker. You'll fill ROE, paid status, and batch ref later when reconciling.
       </div>
     </div>
@@ -2519,7 +2573,8 @@
 
       <div class="reports-switch" id="reportsSwitch" role="tablist" aria-label="Report type">
         <button type="button" data-report="monthly" class="on" role="tab" aria-selected="true">Monthly</button>
-        <button type="button" data-report="payouts" role="tab" aria-selected="false">Payouts</button>
+        <button type="button" data-report="parties" class="not-party" role="tab" aria-selected="false">Parties</button>
+        <button type="button" data-report="payouts" class="not-party" role="tab" aria-selected="false">Payouts</button>
       </div>
 
       <!-- Monthly rollup panel -->
@@ -2547,6 +2602,17 @@
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- Parties report panel (client / admin) -->
+      <div class="recent-section report-panel" id="reportParties" hidden>
+        <div class="recent-section-header">
+          <span class="recent-section-title">By party</span>
+          <div class="select-wrapper" style="min-width:150px;">
+            <select id="partyReportMonth" class="select" aria-label="Month"></select>
+          </div>
+        </div>
+        <div id="partyReportBody"></div>
       </div>
 
       <!-- Payout batches panel -->
@@ -2657,6 +2723,44 @@
     </section>
 
     <!-- ============================================================
+         PARTIES VIEW — client manages parties, fee %, and party logins
+         ============================================================ -->
+    <section class="view client-only" id="partiesView" role="tabpanel" aria-labelledby="tabParties">
+
+      <div class="title-block">
+        <div class="eyebrow">Parties</div>
+        <h1>Your <em>parties</em></h1>
+        <p class="subtitle">Set the % you charge each party, give them their own login, and see what you earn from them.</p>
+      </div>
+
+      <div class="add-user-card">
+        <h3>Add a party</h3>
+        <form id="addPartyForm" autocomplete="off">
+          <div class="field-pair">
+            <div class="field">
+              <div class="field-label"><label for="newPartyName">Party name</label></div>
+              <input type="text" id="newPartyName" class="input" maxlength="80" required />
+            </div>
+            <div class="field">
+              <div class="field-label"><label for="newPartyFee">Your fee %</label><span class="hint">e.g. 10</span></div>
+              <input type="number" inputmode="decimal" step="0.01" min="0" max="99.99" id="newPartyFee" class="input" placeholder="10" />
+            </div>
+          </div>
+          <button type="submit" class="submit-btn" id="addPartyBtn"><span class="btn-label">Add party</span></button>
+        </form>
+      </div>
+
+      <div class="recent-section">
+        <div class="recent-section-header">
+          <span class="recent-section-title">Your parties</span>
+          <button class="refresh-btn" id="partiesRefreshBtn" type="button" aria-label="Refresh parties"><span>Refresh</span></button>
+        </div>
+        <div class="party-cards" id="partyCards"></div>
+      </div>
+
+    </section>
+
+    <!-- ============================================================
          FOOTER (shared)
          ============================================================ -->
     <footer class="footer">
@@ -2691,6 +2795,15 @@
       </svg>
       <span>Reports</span>
     </button>
+    <button class="tab client-only" id="tabParties" type="button" role="tab" aria-selected="false" aria-controls="partiesView" data-tab="parties">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="9" cy="8" r="3.2" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M3 19c.6-3 3-5 6-5s5.4 2 6 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        <circle cx="17" cy="9" r="2.4" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M14.5 17c.4-1.6 1.7-2.8 3.5-2.8s3.1 1.2 3.5 2.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      <span>Parties</span>
+    </button>
     <button class="tab admin-only" id="tabAdmin" type="button" role="tab" aria-selected="false" aria-controls="adminView" data-tab="admin">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <circle cx="9" cy="8" r="3.2" stroke="currentColor" stroke-width="1.6"/>
@@ -2716,9 +2829,13 @@
           <span class="ledger-sum-fx" id="ledgerSumFx"></span>
         </div>
       </div>
-      <button type="button" class="ledger-sum-clear" id="ledgerSumClear">Clear</button>
+      <div class="sum-actions">
+        <button type="button" class="ledger-sum-pay" id="ledgerPayParty" hidden>Pay party</button>
+        <button type="button" class="ledger-sum-clear" id="ledgerSumClear">Clear</button>
+      </div>
     </div>
   </div>
+  <input type="file" id="attachInput" accept="image/*" class="file-input" />
 
   <!-- ============================================================
        SUCCESS OVERLAY
@@ -3008,7 +3125,7 @@
 
     function showAuthScreen(msg) {
       document.body.classList.add('auth-mode');
-      document.body.classList.remove('role-admin', 'role-client');
+      document.body.classList.remove('role-admin', 'role-client', 'role-party');
       authScreen.classList.add('visible');
       if (msg) { authError.textContent = msg; authError.classList.add('visible'); }
       else     { authError.classList.remove('visible'); }
@@ -3024,11 +3141,29 @@
     function applyRole(role) {
       document.body.classList.toggle('role-admin',  role === 'admin');
       document.body.classList.toggle('role-client', role === 'client');
+      document.body.classList.toggle('role-party',  role === 'party');
+      const logSub = document.querySelector('#logView .subtitle');
+      if (logSub) logSub.textContent = role === 'party'
+        ? 'Log a payment as soon as you receive it and attach the screenshot. Your status and what you receive appear in Activity.'
+        : 'Log it the moment a client confirms a transfer. ROE, fees, and disbursement are added later in the tracker.';
+      const repH1  = document.querySelector('#reportsView h1');
+      const repSub = document.querySelector('#reportsView .subtitle');
+      if (repH1 && repSub) {
+        if (role === 'party') {
+          repH1.innerHTML = 'My <em>hisaab</em>';
+          repSub.textContent = 'Your payments by month: what you sent, the service fee, and what you receive.';
+        } else {
+          repH1.innerHTML = 'Monthly, <em>parties</em> &amp; payouts';
+          repSub.textContent = 'Month-end totals, what you earn per party, and settled batches.';
+        }
+      }
+      const unpaidLbl = document.querySelector('[data-card="unpaid"] .summary-card-label');
+      if (unpaidLbl) unpaidLbl.textContent = role === 'party' ? 'Still to receive' : 'Unpaid PKR';
       const chip = document.getElementById('userRoleChip');
       const name = document.getElementById('userChipName');
       if (chip) {
         chip.textContent = role;
-        chip.className = 'role-chip ' + (role === 'client' ? 'client' : '');
+        chip.className = 'role-chip ' + (role === 'client' || role === 'party' ? 'client' : '');
       }
       if (name && session) name.textContent = session.username;
     }
@@ -3060,6 +3195,7 @@
             username: r.username,
             role: r.role,
             clientId: r.clientId,
+            partyName: r.partyName || '',
             expiresAt: r.expiresAt
           });
           loginPass.value = '';
@@ -3156,6 +3292,7 @@
       log:      document.getElementById('logView'),
       activity: document.getElementById('activityView'),
       reports:  document.getElementById('reportsView'),
+      parties:  document.getElementById('partiesView'),
       admin:    document.getElementById('adminView'),
     };
     let currentTab = 'log';
@@ -3164,6 +3301,7 @@
       if (!views[name] || currentTab === name) return;
       // The admin tab is invisible to clients; ignore stale localStorage.
       if (name === 'admin' && (!session || session.role !== 'admin')) return;
+      if (name === 'parties' && (!session || session.role !== 'client')) return;
       currentTab = name;
       Object.entries(views).forEach(([k, el]) => el.classList.toggle('view-active', k === name));
       tabButtons.forEach((btn) => {
@@ -3176,6 +3314,7 @@
       if (typeof updateLedgerSumbar === 'function') updateLedgerSumbar();
       if (name === 'reports' && typeof onShowReports === 'function') onShowReports();
       if (name === 'admin'   && typeof onShowAdmin   === 'function') onShowAdmin();
+      if (name === 'parties' && typeof onShowParties === 'function') onShowParties();
     }
 
     tabButtons.forEach((btn) => {
@@ -3262,6 +3401,20 @@
         if (party) payload.clientName = party;
       }
 
+      // A screenshot is expected so the payment can be verified. Logging
+      // without one is allowed, but the person is warned and the entry is
+      // highlighted afterwards.
+      if (!screenshotDataUrl) {
+        const go = await showPromptModal({
+          eyebrow: 'Heads up',
+          title: 'No screenshot attached',
+          subtitle: 'A screenshot is needed to verify this payment. You can still log it, but it will be highlighted as missing its screenshot.',
+          okLabel: 'Log without screenshot',
+          cancelLabel: 'Go back'
+        });
+        if (!go) return;
+      }
+
       window.lastSubmission = Object.assign({ clientName: payload.clientName || session.username }, payload);
       setLoading(true);
 
@@ -3269,6 +3422,7 @@
         const result = await apiPost('logPayment', payload, payload.screenshot ? { timeoutMs: 60000 } : undefined);
         if (result.ok) {
           dashboardCache.data = null;
+          window.lastSubmission.missingShot = !!result.missingScreenshot;
           handleSuccess();
         } else {
           showError('Server rejected the entry', result.error || 'Unknown error from backend.');
@@ -3308,7 +3462,8 @@
     function handleSuccess() {
       const data = window.lastSubmission;
       const cur = data.currency || 'USD';
-      successMeta.innerHTML = `${formatMoney(parseFloat(data.usdAmount), cur)} ${cur} · ${data.account}<br>${data.clientName} · ${formatDate(data.paymentDate)}`;
+      successMeta.innerHTML = `${formatMoney(parseFloat(data.usdAmount), cur)} ${cur} · ${data.account}<br>${escapeHtml(data.clientName)} · ${formatDate(data.paymentDate)}`
+        + (data.missingShot ? '<br><strong style="color:var(--coral-deep);">No screenshot, flagged for review</strong>' : '');
 
       successOverlay.classList.add('visible');
 
@@ -3408,10 +3563,14 @@
           + '</div>'
           + '<input id="promptField' + i + '" class="input" type="' + (f.type || 'text') + '" '
           + 'autocomplete="' + (f.autocomplete || 'off') + '" '
-          + 'autocapitalize="none" autocorrect="off" spellcheck="false" />'
+          + 'autocapitalize="none" autocorrect="off" spellcheck="false"'
+          + (f.value !== undefined ? ' value="' + escapeHtml(String(f.value)) + '"' : '')
+          + (f.readonly ? ' readonly' : '') + ' />'
           + '</div>'
         ).join('');
         const inputs = promptBodyEl.querySelectorAll('input');
+        promptCancelBtn.textContent = opts.cancelLabel || 'Cancel';
+        promptCancelBtn.style.display = opts.hideCancel ? 'none' : '';
 
         const close = (result) => {
           promptModalEl.classList.remove('visible');
@@ -3428,6 +3587,7 @@
             const err = opts.validate(values);
             if (err) { showError(opts.title || 'Invalid', err); return; }
           }
+          if (typeof opts.onOk === 'function') { try { opts.onOk(values); } catch (e) {} }
           close(values);
         };
         const onKey = (ev) => {
@@ -3663,6 +3823,8 @@
         renderNotReceived(j.allEntries || []);
         renderStatements(j.months || []);
         renderPayouts(j.payouts || []);
+        if (reportMode === 'parties') renderPartyReport();
+        if (typeof renderPartiesTab === 'function') renderPartiesTab();
       } catch (err) {
         const msg = (err && err.name === 'AbortError')
           ? 'Request timed out — check your connection.'
@@ -3769,14 +3931,31 @@
       const dayText = relativeDay(e.daysSince, e.paymentDate);
       const dayClass = dayColorClass(e.daysSince);
       const receiptTag = receiptPill(e.receipt);
-      const paidTag    = paidPill(e.paidStatus);
+      const role0 = session ? session.role : '';
+      let paidTag = paidPill(e.paidStatus);
+      if (role0 === 'party') {
+        paidTag = e.paidStatus === 'Paid'
+          ? '<span class="recent-tag paid"><span class="recent-tag-dot"></span>Paid to you</span>'
+          : '<span class="recent-tag unpaid"><span class="recent-tag-dot"></span>Awaiting payment</span>';
+      } else if (role0 === 'client') {
+        if (e.paidStatus === 'Paid') paidTag = '<span class="recent-tag paid"><span class="recent-tag-dot"></span>Paid to you</span>';
+        if (e.partyPaid === 'Paid') paidTag += '<span class="recent-tag paid"><span class="recent-tag-dot"></span>Paid to party</span>';
+        else if (needsPartyPayout(e)) paidTag += '<span class="recent-tag pending"><span class="recent-tag-dot"></span>Owe party</span>';
+      }
 
       const metaParts = [];
       if (e.account) metaParts.push(accountTagHtml(e.account));
       if (dayText)   metaParts.push(`<span class="recent-days ${dayClass}">${escapeHtml(dayText)}</span>`);
+      if (session && session.role === 'party') {
+        if (typeof e.netToParty === 'number') metaParts.push(`<span class="profit-chip">You get ${formatPKR(e.netToParty)}</span>`);
+      } else if (typeof e.clientProfit === 'number') {
+        metaParts.push(`<span class="profit-chip">Profit ${formatPKR(e.clientProfit)}</span>`);
+      }
       const meta = metaParts.join('<span class="recent-meta-sep">·</span>');
 
-      const tags = [receiptTag, paidTag].filter(Boolean).join('');
+      const noShotTag = e.noScreenshot
+        ? '<span class="recent-tag noshot"><span class="recent-tag-dot"></span>No screenshot</span>' : '';
+      const tags = [receiptTag, paidTag, noShotTag].filter(Boolean).join('');
       const caret = '<svg class="recent-row-caret" viewBox="0 0 12 8" fill="none" aria-hidden="true">'
                   + '<path d="M1 1.5l5 5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
                   + '</svg>';
@@ -3788,7 +3967,7 @@
                  + `<span class="recent-mini-text">${escapeHtml(miniBits || (e.paidStatus || 'Unpaid'))}</span></div>`;
 
       return ''
-        + `<div class="recent-row" role="button" tabindex="0" data-row="${e.row}" aria-expanded="false">`
+        + `<div class="recent-row${e.noScreenshot ? ' no-shot' : ''}" role="button" tabindex="0" data-row="${e.row}" aria-expanded="false">`
         +   '<div class="recent-row-top">'
         +     `<span class="recent-name">${escapeHtml(e.clientName || '—')}</span>`
         +     '<span style="display:inline-flex;align-items:center;flex-shrink:0;">'
@@ -3813,8 +3992,53 @@
       return 'var(--muted-soft)';
     }
 
+    function fmtPct(x) {
+      if (typeof x !== 'number') return '';
+      return (x * 100).toFixed(2).replace(/\.?0+$/, '') + '%';
+    }
+
+    function screenshotCellHtml(e) {
+      if (e.screenshotUrl) {
+        return '<div class="detail-cell full"><span class="detail-key">Screenshot</span>'
+          + `<span class="detail-val"><a href="${escapeHtml(e.screenshotUrl)}" target="_blank" rel="noopener" style="color:var(--coral-deep);font-weight:600;">View screenshot ↗</a></span></div>`;
+      }
+      if (e.receipt === 'Not Received' || !e.key) return '';
+      return '<div class="detail-cell full"><span class="detail-key">Screenshot</span>'
+        + (e.noScreenshot
+            ? '<span class="detail-val" style="color:var(--coral-deep);font-weight:600;">Missing — flagged for review</span>'
+            : '<span class="detail-val empty">—</span>')
+        + `<button type="button" class="btn btn-ghost attach-shot-btn" data-key="${escapeHtml(e.key)}">Attach screenshot</button></div>`;
+    }
+
     function detailGridHtml(e) {
+      const role = session ? session.role : '';
       const actualFilled = (typeof e.actualUsdAmount === 'number');
+      const paidCls = 'mono ' + (e.paidStatus === 'Paid' ? 'success' : 'coral');
+
+      // A party only ever sees its own side of the chain: gross, its service
+      // fee, and what it receives. Nothing about anyone else's percentage.
+      if (role === 'party') {
+        const pc = [
+          cell_('Payment date',    e.paymentDate ? formatDate(e.paymentDate) : '', 'mono'),
+          cell_('Logged on',       e.entryDate   ? formatDate(e.entryDate)   : '', 'mono'),
+          cell_('Amount sent',     (typeof e.usdAmount === 'number') ? formatMoney(e.usdAmount, e.currency) : '', 'mono'),
+          cell_('Amount verified', actualFilled ? formatMoney(e.actualUsdAmount, e.currency) : '', 'mono ' + (actualFilled ? 'success' : '')),
+          cell_('Gross PKR',       (typeof e.pkrAmount === 'number') ? formatPKR(e.pkrAmount) : '', 'mono'),
+          cell_('Rate (ROE)',      (typeof e.roe === 'number') ? Number(e.roe).toFixed(2) : '', 'mono'),
+          cell_('Service fee' + (typeof e.partyFeePct === 'number' ? ' (' + fmtPct(e.partyFeePct) + ')' : ''),
+                (typeof e.partyFeeAmount === 'number') ? formatPKR(e.partyFeeAmount) : '', 'mono'),
+          cell_('You receive',     (typeof e.netToParty === 'number') ? formatPKR(e.netToParty) : '', paidCls),
+          cell_('Account',         e.account || ''),
+          cell_('Receipt',         e.receipt || ''),
+          cell_('Paid to you',     e.paidStatus === 'Paid' ? 'Yes' : 'Not yet'),
+          cell_('Paid on',         e.paidDate ? formatDate(e.paidDate) : '', 'mono'),
+          cell_('Payment reference', e.batchRef || '', 'mono', true),
+        ];
+        const shot = screenshotCellHtml(e);
+        if (shot) pc.push(shot);
+        return `<div class="detail-grid">${pc.join('')}</div>`;
+      }
+
       const cells = [
         cell_('Payment date',      e.paymentDate ? formatDate(e.paymentDate) : '', 'mono'),
         cell_('Logged on',         e.entryDate   ? formatDate(e.entryDate)   : '', 'mono'),
@@ -3823,7 +4047,8 @@
         cell_('Currency',          e.currency || 'USD', 'mono'),
         cell_('PKR amount',        (typeof e.pkrAmount === 'number') ? formatPKR(e.pkrAmount) : '', 'mono'),
         cell_('ROE',               (typeof e.roe === 'number')        ? Number(e.roe).toFixed(2) : '', 'mono'),
-        cell_('Final PKR to pay',  (typeof e.finalPKR === 'number')   ? formatPKR(e.finalPKR) : '', 'mono ' + (e.paidStatus === 'Paid' ? 'success' : 'coral')),
+        cell_(role === 'client' ? 'You receive' : 'Final PKR to pay',
+                                   (typeof e.finalPKR === 'number')   ? formatPKR(e.finalPKR) : '', paidCls),
         cell_('Days since',        (typeof e.daysSince === 'number')  ? String(e.daysSince) : '', 'mono ' + dayColorClass(e.daysSince)),
         cell_('Account',           e.account || ''),
         cell_('Sender (actual)',   e.actualSenderName || '', '', /* full */ true),
@@ -3832,13 +4057,21 @@
         cell_('Paid on',           e.paidDate ? formatDate(e.paidDate) : '', 'mono'),
         cell_('Batch ref',         e.batchRef || '', 'mono', /* full */ true),
         cell_('Logged by',         e.loggedBy || '', 'mono'),
+        cell_('Party fee %',       typeof e.partyFeePct === 'number' ? fmtPct(e.partyFeePct) : 'Not set', 'mono'),
+        cell_('Party fee (PKR)',   (typeof e.partyFeeAmount === 'number') ? formatPKR(e.partyFeeAmount) : '', 'mono'),
+        cell_('Net to party',      (typeof e.netToParty === 'number') ? formatPKR(e.netToParty) : '', 'mono'),
+        cell_(role === 'client' ? 'My profit' : 'Client profit',
+                                   (typeof e.clientProfit === 'number') ? formatPKR(e.clientProfit) : '', 'mono success'),
+        cell_('Paid to party',     e.partyPaid === 'Paid' ? ('Yes' + (e.partyPaidDate ? ' · ' + formatDate(e.partyPaidDate) : '')) : (needsPartyPayout(e) ? 'Not yet' : ''),
+                                   'mono ' + (e.partyPaid === 'Paid' ? 'success' : '')),
+        cell_('Party payment ref', e.partyPayRef || '', 'mono'),
       ];
-      if (e.screenshotUrl) {
-        cells.push(
-          '<div class="detail-cell full"><span class="detail-key">Screenshot</span>'
-          + `<span class="detail-val"><a href="${escapeHtml(e.screenshotUrl)}" target="_blank" rel="noopener" style="color:var(--coral-deep);font-weight:600;">View screenshot ↗</a></span></div>`
-        );
+      if (e.partyPaid === 'Paid' && role === 'client' && e.key) {
+        cells.push('<div class="detail-cell full"><button type="button" class="btn btn-ghost undo-party-pay-btn" '
+          + `data-key="${escapeHtml(e.key)}">Undo: mark as not paid to party</button></div>`);
       }
+      const shot = screenshotCellHtml(e);
+      if (shot) cells.push(shot);
       const adminEdit =
         '<div class="detail-cell full admin-only" style="margin-top:6px;">'
         + `<button type="button" class="btn btn-ghost edit-entry-btn" data-edit-row="${e.row}">`
@@ -3898,8 +4131,8 @@
         +     '</div>'
         +     '<div class="month-stats">'
         +       `<div><div class="month-stat-key">USD received</div><div class="month-stat-val">${formatUSD0(m.totalUSD)}</div></div>`
-        +       `<div><div class="month-stat-key">PKR final</div><div class="month-stat-val">${formatPKR(m.totalFinalPKR)}</div></div>`
-        +       `<div><div class="month-stat-key">Outstanding</div><div class="month-stat-val ${outstandingClass}">${formatPKR(m.outstandingPKR)}</div></div>`
+        +       `<div><div class="month-stat-key">${session && session.role === 'party' ? 'You receive' : 'PKR final'}</div><div class="month-stat-val">${formatPKR(m.totalFinalPKR)}</div></div>`
+        +       `<div><div class="month-stat-key">${session && session.role === 'party' ? 'Still to receive' : 'Outstanding'}</div><div class="month-stat-val ${outstandingClass}">${formatPKR(m.outstandingPKR)}</div></div>`
         +       `<div><div class="month-stat-key">Avg ROE</div><div class="month-stat-val">${avgRoe}</div></div>`
         +     '</div>'
         +     '<div class="month-status-line">'
@@ -3983,13 +4216,16 @@
     let reportMode = 'monthly';
     function onShowReports() {
       if (!dashboardCache.data) { loadDashboard(); return; }
-      if (reportMode === 'payouts') onShowPayouts(); else onShowStatements();
+      if (reportMode === 'payouts') onShowPayouts();
+      else if (reportMode === 'parties') renderPartyReport();
+      else onShowStatements();
     }
     (function wireReportsSwitch() {
       const sw = document.getElementById('reportsSwitch');
       if (!sw) return;
       const monthlyPanel = document.getElementById('reportMonthly');
       const payoutsPanel  = document.getElementById('reportPayouts');
+      const partiesPanel  = document.getElementById('reportParties');
       sw.addEventListener('click', (ev) => {
         const b = ev.target.closest('button'); if (!b) return;
         reportMode = b.dataset.report;
@@ -4000,6 +4236,7 @@
         });
         if (monthlyPanel) monthlyPanel.hidden = reportMode !== 'monthly';
         if (payoutsPanel) payoutsPanel.hidden = reportMode !== 'payouts';
+        if (partiesPanel) partiesPanel.hidden = reportMode !== 'parties';
         onShowReports();
       });
     })();
@@ -4134,7 +4371,17 @@
       return e.paymentDate.slice(0, 7) >= recentCutoffYM(); // 'YYYY-MM' compares fine
     }
     function isSettled(e) {
-      return e.receipt === 'Confirmed' && e.paidStatus === 'Paid';
+      return e.receipt === 'Confirmed' && e.paidStatus === 'Paid' && !needsPartyPayout(e);
+    }
+
+    // The client still owes this payment to a party: received and verified,
+    // priced, a fee % is set, and not yet marked paid out.
+    function needsPartyPayout(e) {
+      return !!session && session.role === 'client'
+        && e.receipt === 'Confirmed'
+        && typeof e.partyFeePct === 'number'
+        && typeof e.netToParty === 'number'
+        && e.partyPaid !== 'Paid';
     }
 
     // Ledger multi-select: set of selected row numbers, the entries currently
@@ -4155,6 +4402,7 @@
       { key: 'paid',        label: 'Paid' },
       { key: 'overdue',     label: 'Overdue' },
       { key: 'unpriced',    label: 'Needs pricing' },
+      { key: 'owe',         label: 'Owe party' },
     ];
     function matchStatus(e, key) {
       const unpaid = (e.paidStatus || 'Unpaid') !== 'Paid';
@@ -4167,6 +4415,7 @@
         case 'paid':        return e.paidStatus === 'Paid';
         case 'overdue':     return unpaid && typeof e.daysSince === 'number' && e.daysSince > 10;
         case 'unpriced':    return unpaid && !priced;
+        case 'owe':         return needsPartyPayout(e);
         default:            return true;
       }
     }
@@ -4421,14 +4670,15 @@
     // USD total counts USD-currency rows only (no conversion); other
     // currencies are kept apart. PKR total sums the final PKR-to-pay.
     function ledgerSums(entries) {
-      let usd = 0, pkr = 0; const fx = {};
+      let usd = 0, pkr = 0, net = 0; const fx = {};
       entries.forEach((e) => {
         const isUSD = !e.currency || String(e.currency).toUpperCase() === 'USD';
         const amt = (typeof e.usdAmount === 'number') ? e.usdAmount : 0;
         if (isUSD) usd += amt; else if (amt) fx[e.currency] = (fx[e.currency] || 0) + amt;
         if (typeof e.finalPKR === 'number') pkr += e.finalPKR;
+        if (typeof e.netToParty === 'number') net += e.netToParty;
       });
-      return { usd, pkr, fx };
+      return { usd, pkr, net, fx };
     }
 
     function groupSelState(g) {
@@ -4544,7 +4794,15 @@
         sel.length + ' selected';
       document.getElementById('ledgerSumUsd').textContent = formatUSD0(s.usd);
       document.getElementById('ledgerSumPkr').textContent =
-        s.pkr > 0 ? formatPKR(s.pkr) + ' final' : '';
+        (session && session.role === 'client')
+          ? (s.net > 0 ? formatPKR(s.net) + ' to party' : '')
+          : (s.pkr > 0 ? formatPKR(s.pkr) + ' final' : '');
+      const payBtn = document.getElementById('ledgerPayParty');
+      if (payBtn) {
+        const owe = sel.filter(needsPartyPayout).length;
+        payBtn.hidden = owe === 0;
+        payBtn.textContent = 'Pay party (' + owe + ')';
+      }
       document.getElementById('ledgerSumFx').textContent =
         Object.entries(s.fx).map(([c, v]) => '+ ' + formatMoney(v, c)).join('  ');
       bar.classList.add('show');
@@ -5230,6 +5488,7 @@
         const r = await apiPost('parties.add', { party: party });
         if (!r.ok) { showError("Couldn't add party", r.error || 'Try again.'); return; }
         myParties = r.parties || [];
+        if (r.partiesDetail) { partiesDetail = r.partiesDetail; renderPartiesTab(); }
         renderPartyDropdown();
         const sel = document.getElementById('vendorParty');
         if (sel && myParties.indexOf(party) !== -1) sel.value = party;   // auto-select the new one
@@ -5243,6 +5502,7 @@
         const r = await apiPost('parties.remove', { party: name });
         if (!r.ok) { showError("Couldn't remove party", r.error || 'Try again.'); return; }
         myParties = r.parties || [];
+        if (r.partiesDetail) { partiesDetail = r.partiesDetail; renderPartiesTab(); }
         renderPartyDropdown();
       } catch (err) {
         showError('Network error', err.message || 'Try again.');
@@ -5302,6 +5562,419 @@
     })();
 
     // ============================================================
+    // PAYOUTS TO PARTIES + LATE SCREENSHOTS
+    // ============================================================
+    async function payPartiesFromSelection(selected) {
+      const eligible = selected.filter(needsPartyPayout);
+      if (!eligible.length) {
+        showError('Nothing to pay', 'Select payments that are confirmed and still owed to a party.');
+        return;
+      }
+      const by = {};
+      let total = 0;
+      eligible.forEach((e) => {
+        const k = e.clientName || '—';
+        by[k] = (by[k] || 0) + e.netToParty;
+        total += e.netToParty;
+      });
+      const lines = Object.keys(by).map((n) => n + ' ' + formatPKR(by[n])).join(' · ');
+      const skipped = selected.length - eligible.length;
+      const v = await showPromptModal({
+        eyebrow: 'Pay party',
+        title: 'Mark ' + eligible.length + (eligible.length === 1 ? ' payment' : ' payments') + ' as paid',
+        subtitle: lines + '. Total ' + formatPKR(total) + '.'
+          + (skipped ? ' ' + skipped + ' selected skipped (not confirmed or already paid).' : ''),
+        fields: [
+          { name: 'date', label: 'Paid on', type: 'date', value: `${yyyy}-${mm}-${dd}` },
+          { name: 'ref',  label: 'Reference (optional)', hint: 'bank ref or note' }
+        ],
+        okLabel: 'Mark as paid',
+        validate: (x) => (x.date ? '' : 'Pick the date you paid.')
+      });
+      if (!v) return;
+      try {
+        const r = await apiPost('partyPayout', { keys: eligible.map((e) => e.key), paid: true, date: v.date, ref: v.ref });
+        if (!r.ok) { showError("Couldn't record payout", r.error || 'Try again.'); return; }
+        activitySelection.clear();
+        dashboardCache.data = null;
+        showSuccess('Marked paid', r.updated + (r.updated === 1 ? ' payment' : ' payments') + ' marked as paid to the party.');
+        await loadDashboard();
+      } catch (err) {
+        showError('Network error', (err && err.message) || 'Try again.');
+      }
+    }
+
+    async function undoPartyPay(key) {
+      const ok = await showPromptModal({
+        eyebrow: 'Undo', title: 'Mark as not paid to party?',
+        subtitle: 'The payment goes back to "Owe party".', okLabel: 'Undo', cancelLabel: 'Cancel'
+      });
+      if (!ok) return;
+      try {
+        const r = await apiPost('partyPayout', { keys: [key], paid: false });
+        if (!r.ok) { showError("Couldn't undo", r.error || 'Try again.'); return; }
+        dashboardCache.data = null;
+        await loadDashboard();
+      } catch (err) { showError('Network error', (err && err.message) || 'Try again.'); }
+    }
+
+    // Jump from the Parties tab into Activity with that party's owed
+    // payments filtered and pre-selected, ready to pay in one tap.
+    async function startPayout(party) {
+      if (!dashboardCache.data) await loadDashboard();
+      activityFilters.status = 'owe';
+      activityFilters.party = party;
+      activitySelection.clear();
+      switchTab('activity');
+      applyActivityFilters();
+      activityShown.filter(needsPartyPayout).forEach((e) => activitySelection.add(e.row));
+      renderLedger(activityShown);
+    }
+
+    (function wirePayoutBar() {
+      const btn = document.getElementById('ledgerPayParty');
+      if (btn) btn.addEventListener('click', () => {
+        payPartiesFromSelection(activityEntries.filter((e) => activitySelection.has(e.row)));
+      });
+    })();
+
+    // Attach / undo buttons live inside expandable rows, so catch them in the
+    // capture phase before the row's own click handler toggles it.
+    let attachKey = null;
+    document.addEventListener('click', (ev) => {
+      const b = ev.target.closest && ev.target.closest('.attach-shot-btn, .undo-party-pay-btn');
+      if (!b) return;
+      ev.stopPropagation(); ev.preventDefault();
+      if (b.classList.contains('attach-shot-btn')) {
+        attachKey = b.dataset.key;
+        const inp = document.getElementById('attachInput');
+        if (inp) { inp.value = ''; inp.click(); }
+      } else {
+        undoPartyPay(b.dataset.key);
+      }
+    }, true);
+
+    (function wireAttachInput() {
+      const inp = document.getElementById('attachInput');
+      if (!inp) return;
+      inp.addEventListener('change', async () => {
+        const file = inp.files && inp.files[0];
+        if (!file || !attachKey) return;
+        if (!navigator.onLine) { showError('You are offline', 'Connect to a network and try again.'); return; }
+        try {
+          showSuccess('Uploading', 'Attaching the screenshot…');
+          const dataUrl = await downscaleImage(file, 1400, 0.72);
+          const r = await apiPost('attachScreenshot', { key: attachKey, screenshot: dataUrl }, { timeoutMs: 60000 });
+          if (!r.ok) { showError("Couldn't attach", r.error || 'Try again.'); return; }
+          showSuccess('Attached', 'Screenshot saved.');
+          dashboardCache.data = null;
+          await loadDashboard();
+        } catch (err) {
+          showError('Upload failed', (err && err.message) || 'Try again.');
+        } finally { attachKey = null; inp.value = ''; }
+      });
+    })();
+
+    // ============================================================
+    // PARTIES REPORT — per-party totals and the client's profit,
+    // for any month or all time. Built from the same entry list.
+    // ============================================================
+    let partyReportMonth = null;   // null = default to current/latest month
+
+    function partyReportEntries(month) {
+      const all = (dashboardCache.data && dashboardCache.data.allEntries) || [];
+      return all.filter((e) => e.receipt !== 'Not Received'
+        && (month === 'all' || (e.paymentDate || '').slice(0, 7) === month));
+    }
+
+    function renderPartyReport() {
+      const body = document.getElementById('partyReportBody');
+      const sel  = document.getElementById('partyReportMonth');
+      if (!body || !sel) return;
+      const all = (dashboardCache.data && dashboardCache.data.allEntries) || [];
+      const months = Array.from(new Set(all.map((e) => (e.paymentDate || '').slice(0, 7)).filter(Boolean)))
+        .sort().reverse();
+      const nowYM = new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0');
+      if (!partyReportMonth) partyReportMonth = months.indexOf(nowYM) !== -1 ? nowYM : (months[0] || 'all');
+      sel.innerHTML = '<option value="all">All time</option>'
+        + months.map((m) => {
+            const parts = m.split('-');
+            return `<option value="${m}">${MONTH_NAMES[parseInt(parts[1], 10) - 1]} ${parts[0]}</option>`;
+          }).join('');
+      sel.value = partyReportMonth;
+
+      const items = partyReportEntries(partyReportMonth);
+      if (!items.length) {
+        body.innerHTML = '<div class="recent-empty">No payments for this period.</div>';
+        return;
+      }
+      const num = (v) => (typeof v === 'number' ? v : 0);
+      const groups = {};
+      items.forEach((e) => {
+        const key = (e.clientName || '—').trim();
+        const g = groups[key] || (groups[key] = {
+          name: key, count: 0, usd: 0, gross: 0, fee: 0, net: 0, profit: 0,
+          profitPaid: 0, noFee: 0, noShot: 0, owed: 0, paidOut: 0
+        });
+        g.count += 1;
+        const isUSD = !e.currency || String(e.currency).toUpperCase() === 'USD';
+        if (isUSD) g.usd += (typeof e.actualUsdAmount === 'number') ? e.actualUsdAmount : num(e.usdAmount);
+        g.gross += num(e.pkrAmount);
+        g.fee += num(e.partyFeeAmount);
+        g.net += num(e.netToParty);
+        g.profit += num(e.clientProfit);
+        if (e.paidStatus === 'Paid') g.profitPaid += num(e.clientProfit);
+        if (needsPartyPayout(e)) g.owed += e.netToParty;
+        if (e.partyPaid === 'Paid') g.paidOut += num(e.netToParty);
+        if (typeof e.partyFeePct !== 'number') g.noFee += 1;
+        if (e.noScreenshot) g.noShot += 1;
+      });
+      const list = Object.values(groups).sort((a, b) => b.profit - a.profit);
+      const tot = list.reduce((t, g) => ({
+        count: t.count + g.count, gross: t.gross + g.gross, net: t.net + g.net,
+        profit: t.profit + g.profit, paid: t.paid + g.profitPaid, owed: t.owed + g.owed, paidOut: t.paidOut + g.paidOut
+      }), { count: 0, gross: 0, net: 0, profit: 0, paid: 0, owed: 0, paidOut: 0 });
+
+      const profitLabel = (session && session.role === 'admin') ? 'Client profit' : 'My profit';
+      const totalHtml = '<div class="report-total">'
+        + `<div><div class="k">${profitLabel}</div><div class="v big">${formatPKR(tot.profit)}</div></div>`
+        + `<div><div class="k">Payments</div><div class="v big">${tot.count}</div></div>`
+        + `<div><div class="k">Gross PKR</div><div class="v">${formatPKR(tot.gross)}</div></div>`
+        + `<div><div class="k">Net to parties</div><div class="v">${formatPKR(tot.net)}</div></div>`
+        + `<div><div class="k">Profit on paid</div><div class="v">${formatPKR(tot.paid)}</div></div>`
+        + `<div><div class="k">Profit still pending</div><div class="v">${formatPKR(tot.profit - tot.paid)}</div></div>`
+        + `<div><div class="k">Owed to parties</div><div class="v">${formatPKR(tot.owed)}</div></div>`
+        + `<div><div class="k">Paid to parties</div><div class="v">${formatPKR(tot.paidOut)}</div></div>`
+        + '</div>';
+
+      const cards = list.map((g) => {
+        const warn = g.noFee
+          ? `<span class="month-status-chip overdue"><span class="month-status-chip-dot"></span>${g.noFee} without fee %</span>` : '';
+        const shot = g.noShot
+          ? `<span class="month-status-chip unpaid"><span class="month-status-chip-dot"></span>${g.noShot} no screenshot</span>` : '';
+        return '<div class="month-card">'
+          + '<div class="month-card-head">'
+          +   '<div class="month-card-title">'
+          +     `<span class="month-name">${escapeHtml(g.name)}</span>`
+          +     `<span class="month-count">${g.count} ${g.count === 1 ? 'payment' : 'payments'}</span>`
+          +   '</div>'
+          +   '<div class="month-stats">'
+          +     `<div><div class="month-stat-key">Gross PKR</div><div class="month-stat-val">${formatPKR(g.gross)}</div></div>`
+          +     `<div><div class="month-stat-key">Party fee</div><div class="month-stat-val">${formatPKR(g.fee)}</div></div>`
+          +     `<div><div class="month-stat-key">Net to party</div><div class="month-stat-val">${formatPKR(g.net)}</div></div>`
+          +     `<div><div class="month-stat-key">${profitLabel}</div><div class="month-stat-val" style="color:var(--success)">${formatPKR(g.profit)}</div></div>`
+          +     `<div><div class="month-stat-key">Owed to party</div><div class="month-stat-val ${g.owed > 0 ? 'coral' : ''}">${formatPKR(g.owed)}</div></div>`
+          +     `<div><div class="month-stat-key">Paid to party</div><div class="month-stat-val">${formatPKR(g.paidOut)}</div></div>`
+          +   '</div>'
+          +   ((warn || shot) ? `<div class="month-status-line">${warn}${shot}</div>` : '')
+          + '</div></div>';
+      }).join('');
+      body.innerHTML = totalHtml + cards;
+    }
+
+    (function wirePartyReportMonth() {
+      const sel = document.getElementById('partyReportMonth');
+      if (sel) sel.addEventListener('change', () => { partyReportMonth = sel.value; renderPartyReport(); });
+    })();
+
+    // ============================================================
+    // PARTIES TAB (client) — fee %, party logins, per-party earnings
+    // ============================================================
+    let partiesDetail = [];   // [{party, feePct, username, loginActive}]
+
+    async function loadPartiesDetail() {
+      if (!session || session.role !== 'client') return;
+      try {
+        const r = await apiGet('parties.detail');
+        if (r.ok) { partiesDetail = r.parties || []; renderPartiesTab(); }
+      } catch (err) { /* non-fatal */ }
+    }
+
+    function onShowParties() {
+      loadPartiesDetail();
+      if (!dashboardCache.data) loadDashboard();
+    }
+
+    // Apply a mutation response ({parties, partiesDetail}) everywhere.
+    function applyPartyResponse(r) {
+      if (!r) return;
+      if (r.partiesDetail) partiesDetail = r.partiesDetail;
+      if (r.parties) { myParties = r.parties; renderPartyDropdown(); }
+      renderPartiesTab();
+    }
+
+    function partyMonthStats(name) {
+      const all = (dashboardCache.data && dashboardCache.data.allEntries) || [];
+      const nowYM = new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0');
+      let count = 0, profit = 0, owed = 0, paidOut = 0;
+      all.forEach((e) => {
+        if (e.receipt === 'Not Received') return;
+        if ((e.clientName || '').trim().toLowerCase() !== name.toLowerCase()) return;
+        if (needsPartyPayout(e)) owed += e.netToParty;
+        if (e.partyPaid === 'Paid' && typeof e.netToParty === 'number') paidOut += e.netToParty;
+        if ((e.paymentDate || '').slice(0, 7) !== nowYM) return;
+        count += 1;
+        if (typeof e.clientProfit === 'number') profit += e.clientProfit;
+      });
+      return { count: count, profit: profit, owed: owed, paidOut: paidOut };
+    }
+
+    function renderPartiesTab() {
+      const box = document.getElementById('partyCards');
+      if (!box || !session || session.role !== 'client') return;
+      if (!partiesDetail.length) {
+        box.innerHTML = '<div class="recent-empty">No parties yet. Add your first one above.</div>';
+        return;
+      }
+      box.innerHTML = partiesDetail.map((p) => {
+        const hasFee = typeof p.feePct === 'number';
+        const st = partyMonthStats(p.party);
+        const login = p.username
+          ? `Login: ${escapeHtml(p.username)} · ${p.loginActive ? 'active' : 'disabled'}`
+          : 'No login yet';
+        const name = escapeHtml(p.party);
+        const loginBtns = p.username
+          ? `<button type="button" class="btn btn-ghost" data-act="reset" data-party="${name}">Reset password</button>`
+            + `<button type="button" class="btn btn-ghost" data-act="${p.loginActive ? 'disable' : 'enable'}" data-party="${name}">${p.loginActive ? 'Disable login' : 'Enable login'}</button>`
+          : `<button type="button" class="btn btn-primary" data-act="create" data-party="${name}">Create login</button>`;
+        return '<div class="pcard">'
+          + '<div class="pcard-top">'
+          +   `<span class="pcard-name">${name}</span>`
+          +   `<span class="pcard-fee${hasFee ? '' : ' unset'}">${hasFee ? fmtPct(p.feePct) + ' fee' : 'Set fee %'}</span>`
+          + '</div>'
+          + `<div class="pcard-login">${login}</div>`
+          + '<div class="pcard-stats">'
+          +   `<div><div class="pcard-stat-key">This month</div><div class="pcard-stat-val">${st.count} ${st.count === 1 ? 'payment' : 'payments'}</div></div>`
+          +   `<div><div class="pcard-stat-key">My profit</div><div class="pcard-stat-val" style="color:var(--success)">${formatPKR(st.profit)}</div></div>`
+          +   `<div><div class="pcard-stat-key">Owed to party</div><div class="pcard-stat-val" style="color:${st.owed > 0 ? 'var(--coral-deep)' : 'inherit'}">${formatPKR(st.owed)}</div></div>`
+          +   `<div><div class="pcard-stat-key">Paid to party</div><div class="pcard-stat-val">${formatPKR(st.paidOut)}</div></div>`
+          + '</div>'
+          + '<div class="pcard-actions">'
+          + (st.owed > 0 ? `<button type="button" class="btn btn-primary" data-act="payout" data-party="${name}">Pay out</button>` : '')
+          +   `<button type="button" class="btn btn-ghost" data-act="fee" data-party="${name}">Edit %</button>`
+          +   `<button type="button" class="btn btn-ghost" data-act="link" data-party="${name}">Link old payments</button>`
+          +   loginBtns
+          +   `<button type="button" class="btn btn-ghost danger" data-act="remove" data-party="${name}">Remove</button>`
+          + '</div>'
+          + '</div>';
+      }).join('');
+    }
+
+    function showCredentials(c, title) {
+      const note = 'Cubico Pay login\nUsername: ' + c.username + '\nPassword: ' + c.password + '\n' + location.origin;
+      return showPromptModal({
+        eyebrow: title || 'Login ready',
+        title: 'Share with ' + c.party,
+        subtitle: 'The password is shown only now. Copy it and send it to them.',
+        fields: [
+          { name: 'u', label: 'Username', value: c.username, readonly: true },
+          { name: 'p', label: 'Password', value: c.password, readonly: true }
+        ],
+        okLabel: 'Copy & close',
+        hideCancel: true,
+        onOk: () => { try { navigator.clipboard.writeText(note); } catch (e) {} }
+      });
+    }
+
+    async function partyAction(act, party) {
+      try {
+        if (act === 'fee') {
+          const cur = (partiesDetail.find((x) => x.party === party) || {}).feePct;
+          const v = await showPromptModal({
+            eyebrow: 'Fee', title: 'Your fee for ' + party,
+            subtitle: 'The % you charge this party on the gross amount. It applies to new payments, and to earlier ones that have no % yet.',
+            fields: [{ name: 'fee', label: 'Fee %', hint: 'e.g. 10', value: typeof cur === 'number' ? (cur * 100).toFixed(2).replace(/\.?0+$/, '') : '' }],
+            okLabel: 'Save',
+            validate: (x) => {
+              const n = parseFloat(x.fee);
+              return (isNaN(n) || n < 0 || n >= 100) ? 'Enter a number between 0 and 99.99.' : '';
+            }
+          });
+          if (!v) return;
+          const r = await apiPost('parties.setFee', { party: party, feePct: v.fee });
+          if (!r.ok) { showError("Couldn't save fee", r.error || 'Try again.'); return; }
+          applyPartyResponse(r);
+          dashboardCache.data = null; loadDashboard();
+        } else if (act === 'payout') {
+          await startPayout(party);
+        } else if (act === 'link') {
+          const v = await showPromptModal({
+            eyebrow: 'Earlier payments', title: 'Link old payments for ' + party,
+            subtitle: "Older payments saved before logins existed are linked automatically when a party is added. If they were saved under a different spelling, type it exactly as it appears in the old records.",
+            fields: [{ name: 'alias', label: 'Name in old records', value: party }],
+            okLabel: 'Link'
+          });
+          if (!v) return;
+          const r = await apiPost('parties.linkHistory', { party: party, alias: v.alias });
+          if (!r.ok) { showError("Couldn't link", r.error || 'Try again.'); return; }
+          applyPartyResponse(r);
+          showSuccess('Done', (r.linked || 0) + ' earlier ' + (r.linked === 1 ? 'payment' : 'payments') + ' linked to ' + party + '.');
+          dashboardCache.data = null; loadDashboard();
+        } else if (act === 'create') {
+          const r = await apiPost('parties.createLogin', { party: party });
+          if (!r.ok) { showError("Couldn't create login", r.error || 'Try again.'); return; }
+          applyPartyResponse(r);
+          if (r.credentials) await showCredentials(r.credentials, 'Login created');
+        } else if (act === 'reset') {
+          const ok = await showPromptModal({
+            eyebrow: 'Reset password', title: 'Reset ' + party + "'s password?",
+            subtitle: 'A new password is generated and the old one stops working.',
+            okLabel: 'Reset', cancelLabel: 'Cancel'
+          });
+          if (!ok) return;
+          const r = await apiPost('parties.resetLogin', { party: party });
+          if (!r.ok) { showError("Couldn't reset", r.error || 'Try again.'); return; }
+          applyPartyResponse(r);
+          if (r.credentials) await showCredentials(r.credentials, 'New password');
+        } else if (act === 'disable' || act === 'enable') {
+          const r = await apiPost('parties.setLoginActive', { party: party, active: act === 'enable' });
+          if (!r.ok) { showError("Couldn't update login", r.error || 'Try again.'); return; }
+          applyPartyResponse(r);
+        } else if (act === 'remove') {
+          const ok = await showPromptModal({
+            eyebrow: 'Remove party', title: 'Remove ' + party + '?',
+            subtitle: 'They are hidden from your list and their login stops working. Past payments stay in your records.',
+            okLabel: 'Remove', cancelLabel: 'Cancel'
+          });
+          if (!ok) return;
+          const r = await apiPost('parties.remove', { party: party });
+          if (!r.ok) { showError("Couldn't remove party", r.error || 'Try again.'); return; }
+          applyPartyResponse(r);
+        }
+      } catch (err) {
+        showError('Network error', (err && err.message) || 'Try again.');
+      }
+    }
+
+    (function wirePartiesTab() {
+      const box  = document.getElementById('partyCards');
+      const form = document.getElementById('addPartyForm');
+      const refresh = document.getElementById('partiesRefreshBtn');
+      if (box) box.addEventListener('click', (ev) => {
+        const b = ev.target.closest('button[data-act]');
+        if (!b) return;
+        partyAction(b.dataset.act, b.dataset.party);
+      });
+      if (refresh) refresh.addEventListener('click', () => { dashboardCache.data = null; loadPartiesDetail(); loadDashboard(); });
+      if (form) form.addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        const name = document.getElementById('newPartyName').value.trim();
+        const fee  = document.getElementById('newPartyFee').value.trim();
+        if (!name) return;
+        try {
+          const r = await apiPost('parties.add', { party: name, feePct: fee });
+          if (!r.ok) { showError("Couldn't add party", r.error || 'Try again.'); return; }
+          form.reset();
+          applyPartyResponse(r);
+          if (r.linked) showSuccess('Earlier payments linked', r.linked + ' earlier ' + (r.linked === 1 ? 'payment' : 'payments') + ' attached to ' + name + '.');
+          if (fee || r.linked) { dashboardCache.data = null; loadDashboard(); }
+        } catch (err) {
+          showError('Network error', (err && err.message) || 'Try again.');
+        }
+      });
+    })();
+
+    // ============================================================
     // BOOT — orchestrate auth check + per-role wiring
     // ============================================================
     function onAuthReady() {
@@ -5317,7 +5990,8 @@
         if (saved === 'statements' || saved === 'payouts') saved = 'reports';
         if (saved === 'notreceived') saved = 'activity';
         const ok = saved === 'activity' || saved === 'reports'
-          || (saved === 'admin' && session.role === 'admin');
+          || (saved === 'admin' && session.role === 'admin')
+          || (saved === 'parties' && session.role === 'client');
         if (ok) setTimeout(() => switchTab(saved), 0);
       } catch (e) { /* private mode */ }
     }
@@ -5336,6 +6010,7 @@
         // Re-sync any drift between localStorage and server truth.
         session.role     = me.role;
         session.clientId = me.clientId;
+        session.partyName = me.partyName || '';
         session.username = me.username;
         saveSession(session);
         hideAuthScreen();

@@ -86,3 +86,44 @@ payment marked **Paid** gets one row there with the commission on it:
 - Rows are dated by the paid date (Payments Log column P); if that is empty, by the received date (column A).
 - After pasting the new `apps-script.gs` and redeploying, run
   `backfillMyHisaab()` once from the editor to copy payments already marked Paid.
+
+## Parties, party logins and the fee chain
+
+Three kinds of login:
+
+| Role | Sees |
+|---|---|
+| **admin** | Everything, including the My Hisaab tab in the sheet |
+| **client** | Own payments and parties: the party % they charge, net to party, and their own profit (what the admin pays them minus what they pass on to the party) |
+| **party** | Only their own payments: gross PKR, their service fee % and what they receive. Nothing about the client's or admin's percentages |
+
+- A client adds a party and sets its fee % in the **Parties** tab, then taps
+  **Create login**. The username and password are generated and shown once.
+  Reset, disable or remove a party's login from the same card.
+- The party's % is stamped on each payment when it is logged (sheet column U,
+  `partyFeePct`), so changing the rate later never rewrites history. Setting a
+  % for the first time also fills earlier payments of that party that have none.
+- Parties log payments themselves; receipts always start as **Pending** until
+  the admin confirms them. Payments logged without a screenshot (from
+  `SCREENSHOT_FLAG_FROM` in `apps-script.gs`) are warned about and highlighted.
+- Client and admin get a **Parties** report (Reports tab) with profit per party,
+  per month.
+- After pasting the new `apps-script.gs`, redeploy. The Users, Parties and
+  Payments Log tabs gain their new columns automatically.
+
+## Payouts to parties, old payments, late screenshots
+
+- **Paying parties (client).** Activity has an **Owe party** filter (confirmed,
+  priced payments not yet paid out). Tick the payments (or tap **Pay out** on a
+  party's card in the Parties tab, which pre-selects that party's owed
+  payments), then **Pay party** in the bottom bar. Pick the date and an optional
+  reference. This writes `partyPaid`, `partyPaidDate` and `partyPayRef`
+  (Payments Log columns V-X), which the admin can also see. A payout can be
+  undone from the payment's details. Parties see "Paid to you" with the date
+  and reference.
+- **Old payments.** When a party is added, earlier payments saved under that
+  name with client id `legacy` (or blank) are linked to the client
+  automatically. **Link old payments** on a party card handles a different
+  spelling. Payments that already belong to a client are never moved.
+- **Late screenshots.** Any payment without a screenshot has an **Attach
+  screenshot** button in its details (client, party for their own, admin).
