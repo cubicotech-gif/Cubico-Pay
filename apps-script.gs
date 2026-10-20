@@ -1479,6 +1479,50 @@ function backfillMyHisaab() {
 }
 
 /**
+ * Run once from the editor to tidy My Hisaab: rebuilds every row from
+ * Payments Log (dates fall back to the received date), oldest first, and
+ * keeps the commission % each existing row already had. Rows for payments
+ * that are no longer Paid disappear.
+ */
+function rebuildMyHisaab() {
+  const payments = getPaymentsSheetOrThrow_();
+  const hs = getHisaabSheet_();
+  const rate = readHisaabRate_(hs);
+
+  const oldRates = {};
+  const keys = hisaabKeys_(hs);
+  if (keys.length) {
+    hs.getRange(HISAAB_FIRST_ROW, HC.rate, keys.length, 1).getValues()
+      .forEach(function (x, i) { oldRates[keys[i]] = x[0]; });
+  }
+
+  const last = payments.getLastRow();
+  const fresh = [];
+  if (last >= 2) {
+    payments.getRange(2, 1, last - 1, COL.paidDate).getValues().forEach(function (r) {
+      if (r[0] === '' || r[COL.paidStatus - 1] !== 'Paid') return;
+      if (!isNumeric_(r[COL.pkrAmount - 1])) return;
+      fresh.push({ r: r, date: hisaabPaidDate_(r) });
+    });
+  }
+  fresh.sort(function (a, b) { return a.date - b.date; });
+
+  const oldLast = hs.getLastRow();
+  if (oldLast >= HISAAB_FIRST_ROW) {
+    hs.getRange(HISAAB_FIRST_ROW, 1, oldLast - HISAAB_FIRST_ROW + 1, HISAAB_HEADERS.length).clearContent();
+  }
+  if (!fresh.length) return;
+  const out = fresh.map(function (f, i) {
+    const k = hisaabKey_(f.r);
+    const rt = oldRates[k] !== undefined && oldRates[k] !== '' ? oldRates[k] : rate;
+    return buildHisaabRow_(f.r, HISAAB_FIRST_ROW + i, rt);
+  });
+  hs.getRange(HISAAB_FIRST_ROW, 1, out.length, HISAAB_HEADERS.length).setValues(out);
+  applyHisaabFormatting_(hs, HISAAB_FIRST_ROW, out.length);
+  Logger.log('Rebuilt ' + out.length + ' rows in ' + HISAAB_SHEET + '.');
+}
+
+/**
  * Bring My Hisaab in line with one Payments Log row: add/refresh it when
  * Paid, remove it otherwise. Never throws — a Hisaab problem must not
  * block the payment action that triggered it.
@@ -1524,8 +1568,11 @@ function syncHisaabRow_(paymentsSheet, rowN) {
 }
 
 function hisaabPaidDate_(r) {
+  // Payments marked Paid before column P existed have no paid date; use the
+  // date the money was received (column A) rather than today's date.
   const d = r[COL.paidDate - 1];
-  return d instanceof Date ? d : new Date();
+  if (d instanceof Date) return d;
+  return r[0] instanceof Date ? r[0] : new Date();
 }
 
 function normPct_(v) {

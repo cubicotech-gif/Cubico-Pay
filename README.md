@@ -81,5 +81,6 @@ payment marked **Paid** gets one row there with the commission on it:
 - Marking a payment unpaid again removes its row. Editing ROE, fee or the
   actual amount refreshes it.
 - It lives in the sheet only; the PWA never shows it.
+- Payments with no paid date use their received date. `rebuildMyHisaab()` re-dates and sorts all rows, keeping each row's commission %.
 - After pasting the new `apps-script.gs` and redeploying, run
   `backfillMyHisaab()` once from the editor to copy payments already marked Paid.
