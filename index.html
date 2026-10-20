@@ -1677,6 +1677,15 @@
       color: var(--success);
     }
 
+    .ledger-sum-pay {
+      border: none; background: var(--success); color: #fff; font-family: inherit;
+      font-size: 12px; font-weight: 600; padding: 8px 12px; border-radius: 8px; cursor: pointer;
+      white-space: nowrap;
+    }
+    .ledger-sum-pay[hidden] { display: none; }
+    .ledger-sumbar-card .sum-actions { display: flex; gap: 8px; align-items: center; }
+    .attach-shot-btn, .undo-party-pay-btn { margin-top: 4px; }
+
     /* ---- Parties tab (client) ---- */
     .party-cards { display: flex; flex-direction: column; gap: 10px; }
     .pcard {
@@ -2820,9 +2829,13 @@
           <span class="ledger-sum-fx" id="ledgerSumFx"></span>
         </div>
       </div>
-      <button type="button" class="ledger-sum-clear" id="ledgerSumClear">Clear</button>
+      <div class="sum-actions">
+        <button type="button" class="ledger-sum-pay" id="ledgerPayParty" hidden>Pay party</button>
+        <button type="button" class="ledger-sum-clear" id="ledgerSumClear">Clear</button>
+      </div>
     </div>
   </div>
+  <input type="file" id="attachInput" accept="image/*" class="file-input" />
 
   <!-- ============================================================
        SUCCESS OVERLAY
@@ -3918,7 +3931,17 @@
       const dayText = relativeDay(e.daysSince, e.paymentDate);
       const dayClass = dayColorClass(e.daysSince);
       const receiptTag = receiptPill(e.receipt);
-      const paidTag    = paidPill(e.paidStatus);
+      const role0 = session ? session.role : '';
+      let paidTag = paidPill(e.paidStatus);
+      if (role0 === 'party') {
+        paidTag = e.paidStatus === 'Paid'
+          ? '<span class="recent-tag paid"><span class="recent-tag-dot"></span>Paid to you</span>'
+          : '<span class="recent-tag unpaid"><span class="recent-tag-dot"></span>Awaiting payment</span>';
+      } else if (role0 === 'client') {
+        if (e.paidStatus === 'Paid') paidTag = '<span class="recent-tag paid"><span class="recent-tag-dot"></span>Paid to you</span>';
+        if (e.partyPaid === 'Paid') paidTag += '<span class="recent-tag paid"><span class="recent-tag-dot"></span>Paid to party</span>';
+        else if (needsPartyPayout(e)) paidTag += '<span class="recent-tag pending"><span class="recent-tag-dot"></span>Owe party</span>';
+      }
 
       const metaParts = [];
       if (e.account) metaParts.push(accountTagHtml(e.account));
@@ -3979,11 +4002,12 @@
         return '<div class="detail-cell full"><span class="detail-key">Screenshot</span>'
           + `<span class="detail-val"><a href="${escapeHtml(e.screenshotUrl)}" target="_blank" rel="noopener" style="color:var(--coral-deep);font-weight:600;">View screenshot ↗</a></span></div>`;
       }
-      if (e.noScreenshot) {
-        return '<div class="detail-cell full"><span class="detail-key">Screenshot</span>'
-          + '<span class="detail-val" style="color:var(--coral-deep);font-weight:600;">Missing — flagged for review</span></div>';
-      }
-      return '';
+      if (e.receipt === 'Not Received' || !e.key) return '';
+      return '<div class="detail-cell full"><span class="detail-key">Screenshot</span>'
+        + (e.noScreenshot
+            ? '<span class="detail-val" style="color:var(--coral-deep);font-weight:600;">Missing — flagged for review</span>'
+            : '<span class="detail-val empty">—</span>')
+        + `<button type="button" class="btn btn-ghost attach-shot-btn" data-key="${escapeHtml(e.key)}">Attach screenshot</button></div>`;
     }
 
     function detailGridHtml(e) {
@@ -4006,8 +4030,9 @@
           cell_('You receive',     (typeof e.netToParty === 'number') ? formatPKR(e.netToParty) : '', paidCls),
           cell_('Account',         e.account || ''),
           cell_('Receipt',         e.receipt || ''),
-          cell_('Paid status',     e.paidStatus || 'Unpaid'),
+          cell_('Paid to you',     e.paidStatus === 'Paid' ? 'Yes' : 'Not yet'),
           cell_('Paid on',         e.paidDate ? formatDate(e.paidDate) : '', 'mono'),
+          cell_('Payment reference', e.batchRef || '', 'mono', true),
         ];
         const shot = screenshotCellHtml(e);
         if (shot) pc.push(shot);
@@ -4037,7 +4062,14 @@
         cell_('Net to party',      (typeof e.netToParty === 'number') ? formatPKR(e.netToParty) : '', 'mono'),
         cell_(role === 'client' ? 'My profit' : 'Client profit',
                                    (typeof e.clientProfit === 'number') ? formatPKR(e.clientProfit) : '', 'mono success'),
+        cell_('Paid to party',     e.partyPaid === 'Paid' ? ('Yes' + (e.partyPaidDate ? ' · ' + formatDate(e.partyPaidDate) : '')) : (needsPartyPayout(e) ? 'Not yet' : ''),
+                                   'mono ' + (e.partyPaid === 'Paid' ? 'success' : '')),
+        cell_('Party payment ref', e.partyPayRef || '', 'mono'),
       ];
+      if (e.partyPaid === 'Paid' && role === 'client' && e.key) {
+        cells.push('<div class="detail-cell full"><button type="button" class="btn btn-ghost undo-party-pay-btn" '
+          + `data-key="${escapeHtml(e.key)}">Undo: mark as not paid to party</button></div>`);
+      }
       const shot = screenshotCellHtml(e);
       if (shot) cells.push(shot);
       const adminEdit =
@@ -4339,7 +4371,17 @@
       return e.paymentDate.slice(0, 7) >= recentCutoffYM(); // 'YYYY-MM' compares fine
     }
     function isSettled(e) {
-      return e.receipt === 'Confirmed' && e.paidStatus === 'Paid';
+      return e.receipt === 'Confirmed' && e.paidStatus === 'Paid' && !needsPartyPayout(e);
+    }
+
+    // The client still owes this payment to a party: received and verified,
+    // priced, a fee % is set, and not yet marked paid out.
+    function needsPartyPayout(e) {
+      return !!session && session.role === 'client'
+        && e.receipt === 'Confirmed'
+        && typeof e.partyFeePct === 'number'
+        && typeof e.netToParty === 'number'
+        && e.partyPaid !== 'Paid';
     }
 
     // Ledger multi-select: set of selected row numbers, the entries currently
@@ -4360,6 +4402,7 @@
       { key: 'paid',        label: 'Paid' },
       { key: 'overdue',     label: 'Overdue' },
       { key: 'unpriced',    label: 'Needs pricing' },
+      { key: 'owe',         label: 'Owe party' },
     ];
     function matchStatus(e, key) {
       const unpaid = (e.paidStatus || 'Unpaid') !== 'Paid';
@@ -4372,6 +4415,7 @@
         case 'paid':        return e.paidStatus === 'Paid';
         case 'overdue':     return unpaid && typeof e.daysSince === 'number' && e.daysSince > 10;
         case 'unpriced':    return unpaid && !priced;
+        case 'owe':         return needsPartyPayout(e);
         default:            return true;
       }
     }
@@ -4626,14 +4670,15 @@
     // USD total counts USD-currency rows only (no conversion); other
     // currencies are kept apart. PKR total sums the final PKR-to-pay.
     function ledgerSums(entries) {
-      let usd = 0, pkr = 0; const fx = {};
+      let usd = 0, pkr = 0, net = 0; const fx = {};
       entries.forEach((e) => {
         const isUSD = !e.currency || String(e.currency).toUpperCase() === 'USD';
         const amt = (typeof e.usdAmount === 'number') ? e.usdAmount : 0;
         if (isUSD) usd += amt; else if (amt) fx[e.currency] = (fx[e.currency] || 0) + amt;
         if (typeof e.finalPKR === 'number') pkr += e.finalPKR;
+        if (typeof e.netToParty === 'number') net += e.netToParty;
       });
-      return { usd, pkr, fx };
+      return { usd, pkr, net, fx };
     }
 
     function groupSelState(g) {
@@ -4749,7 +4794,15 @@
         sel.length + ' selected';
       document.getElementById('ledgerSumUsd').textContent = formatUSD0(s.usd);
       document.getElementById('ledgerSumPkr').textContent =
-        s.pkr > 0 ? formatPKR(s.pkr) + ' final' : '';
+        (session && session.role === 'client')
+          ? (s.net > 0 ? formatPKR(s.net) + ' to party' : '')
+          : (s.pkr > 0 ? formatPKR(s.pkr) + ' final' : '');
+      const payBtn = document.getElementById('ledgerPayParty');
+      if (payBtn) {
+        const owe = sel.filter(needsPartyPayout).length;
+        payBtn.hidden = owe === 0;
+        payBtn.textContent = 'Pay party (' + owe + ')';
+      }
       document.getElementById('ledgerSumFx').textContent =
         Object.entries(s.fx).map(([c, v]) => '+ ' + formatMoney(v, c)).join('  ');
       bar.classList.add('show');
@@ -5509,6 +5562,120 @@
     })();
 
     // ============================================================
+    // PAYOUTS TO PARTIES + LATE SCREENSHOTS
+    // ============================================================
+    async function payPartiesFromSelection(selected) {
+      const eligible = selected.filter(needsPartyPayout);
+      if (!eligible.length) {
+        showError('Nothing to pay', 'Select payments that are confirmed and still owed to a party.');
+        return;
+      }
+      const by = {};
+      let total = 0;
+      eligible.forEach((e) => {
+        const k = e.clientName || '—';
+        by[k] = (by[k] || 0) + e.netToParty;
+        total += e.netToParty;
+      });
+      const lines = Object.keys(by).map((n) => n + ' ' + formatPKR(by[n])).join(' · ');
+      const skipped = selected.length - eligible.length;
+      const v = await showPromptModal({
+        eyebrow: 'Pay party',
+        title: 'Mark ' + eligible.length + (eligible.length === 1 ? ' payment' : ' payments') + ' as paid',
+        subtitle: lines + '. Total ' + formatPKR(total) + '.'
+          + (skipped ? ' ' + skipped + ' selected skipped (not confirmed or already paid).' : ''),
+        fields: [
+          { name: 'date', label: 'Paid on', type: 'date', value: `${yyyy}-${mm}-${dd}` },
+          { name: 'ref',  label: 'Reference (optional)', hint: 'bank ref or note' }
+        ],
+        okLabel: 'Mark as paid',
+        validate: (x) => (x.date ? '' : 'Pick the date you paid.')
+      });
+      if (!v) return;
+      try {
+        const r = await apiPost('partyPayout', { keys: eligible.map((e) => e.key), paid: true, date: v.date, ref: v.ref });
+        if (!r.ok) { showError("Couldn't record payout", r.error || 'Try again.'); return; }
+        activitySelection.clear();
+        dashboardCache.data = null;
+        showSuccess('Marked paid', r.updated + (r.updated === 1 ? ' payment' : ' payments') + ' marked as paid to the party.');
+        await loadDashboard();
+      } catch (err) {
+        showError('Network error', (err && err.message) || 'Try again.');
+      }
+    }
+
+    async function undoPartyPay(key) {
+      const ok = await showPromptModal({
+        eyebrow: 'Undo', title: 'Mark as not paid to party?',
+        subtitle: 'The payment goes back to "Owe party".', okLabel: 'Undo', cancelLabel: 'Cancel'
+      });
+      if (!ok) return;
+      try {
+        const r = await apiPost('partyPayout', { keys: [key], paid: false });
+        if (!r.ok) { showError("Couldn't undo", r.error || 'Try again.'); return; }
+        dashboardCache.data = null;
+        await loadDashboard();
+      } catch (err) { showError('Network error', (err && err.message) || 'Try again.'); }
+    }
+
+    // Jump from the Parties tab into Activity with that party's owed
+    // payments filtered and pre-selected, ready to pay in one tap.
+    async function startPayout(party) {
+      if (!dashboardCache.data) await loadDashboard();
+      activityFilters.status = 'owe';
+      activityFilters.party = party;
+      activitySelection.clear();
+      switchTab('activity');
+      applyActivityFilters();
+      activityShown.filter(needsPartyPayout).forEach((e) => activitySelection.add(e.row));
+      renderLedger(activityShown);
+    }
+
+    (function wirePayoutBar() {
+      const btn = document.getElementById('ledgerPayParty');
+      if (btn) btn.addEventListener('click', () => {
+        payPartiesFromSelection(activityEntries.filter((e) => activitySelection.has(e.row)));
+      });
+    })();
+
+    // Attach / undo buttons live inside expandable rows, so catch them in the
+    // capture phase before the row's own click handler toggles it.
+    let attachKey = null;
+    document.addEventListener('click', (ev) => {
+      const b = ev.target.closest && ev.target.closest('.attach-shot-btn, .undo-party-pay-btn');
+      if (!b) return;
+      ev.stopPropagation(); ev.preventDefault();
+      if (b.classList.contains('attach-shot-btn')) {
+        attachKey = b.dataset.key;
+        const inp = document.getElementById('attachInput');
+        if (inp) { inp.value = ''; inp.click(); }
+      } else {
+        undoPartyPay(b.dataset.key);
+      }
+    }, true);
+
+    (function wireAttachInput() {
+      const inp = document.getElementById('attachInput');
+      if (!inp) return;
+      inp.addEventListener('change', async () => {
+        const file = inp.files && inp.files[0];
+        if (!file || !attachKey) return;
+        if (!navigator.onLine) { showError('You are offline', 'Connect to a network and try again.'); return; }
+        try {
+          showSuccess('Uploading', 'Attaching the screenshot…');
+          const dataUrl = await downscaleImage(file, 1400, 0.72);
+          const r = await apiPost('attachScreenshot', { key: attachKey, screenshot: dataUrl }, { timeoutMs: 60000 });
+          if (!r.ok) { showError("Couldn't attach", r.error || 'Try again.'); return; }
+          showSuccess('Attached', 'Screenshot saved.');
+          dashboardCache.data = null;
+          await loadDashboard();
+        } catch (err) {
+          showError('Upload failed', (err && err.message) || 'Try again.');
+        } finally { attachKey = null; inp.value = ''; }
+      });
+    })();
+
+    // ============================================================
     // PARTIES REPORT — per-party totals and the client's profit,
     // for any month or all time. Built from the same entry list.
     // ============================================================
@@ -5547,7 +5714,7 @@
         const key = (e.clientName || '—').trim();
         const g = groups[key] || (groups[key] = {
           name: key, count: 0, usd: 0, gross: 0, fee: 0, net: 0, profit: 0,
-          profitPaid: 0, noFee: 0, noShot: 0
+          profitPaid: 0, noFee: 0, noShot: 0, owed: 0, paidOut: 0
         });
         g.count += 1;
         const isUSD = !e.currency || String(e.currency).toUpperCase() === 'USD';
@@ -5557,14 +5724,16 @@
         g.net += num(e.netToParty);
         g.profit += num(e.clientProfit);
         if (e.paidStatus === 'Paid') g.profitPaid += num(e.clientProfit);
+        if (needsPartyPayout(e)) g.owed += e.netToParty;
+        if (e.partyPaid === 'Paid') g.paidOut += num(e.netToParty);
         if (typeof e.partyFeePct !== 'number') g.noFee += 1;
         if (e.noScreenshot) g.noShot += 1;
       });
       const list = Object.values(groups).sort((a, b) => b.profit - a.profit);
       const tot = list.reduce((t, g) => ({
         count: t.count + g.count, gross: t.gross + g.gross, net: t.net + g.net,
-        profit: t.profit + g.profit, paid: t.paid + g.profitPaid
-      }), { count: 0, gross: 0, net: 0, profit: 0, paid: 0 });
+        profit: t.profit + g.profit, paid: t.paid + g.profitPaid, owed: t.owed + g.owed, paidOut: t.paidOut + g.paidOut
+      }), { count: 0, gross: 0, net: 0, profit: 0, paid: 0, owed: 0, paidOut: 0 });
 
       const profitLabel = (session && session.role === 'admin') ? 'Client profit' : 'My profit';
       const totalHtml = '<div class="report-total">'
@@ -5574,6 +5743,8 @@
         + `<div><div class="k">Net to parties</div><div class="v">${formatPKR(tot.net)}</div></div>`
         + `<div><div class="k">Profit on paid</div><div class="v">${formatPKR(tot.paid)}</div></div>`
         + `<div><div class="k">Profit still pending</div><div class="v">${formatPKR(tot.profit - tot.paid)}</div></div>`
+        + `<div><div class="k">Owed to parties</div><div class="v">${formatPKR(tot.owed)}</div></div>`
+        + `<div><div class="k">Paid to parties</div><div class="v">${formatPKR(tot.paidOut)}</div></div>`
         + '</div>';
 
       const cards = list.map((g) => {
@@ -5592,6 +5763,8 @@
           +     `<div><div class="month-stat-key">Party fee</div><div class="month-stat-val">${formatPKR(g.fee)}</div></div>`
           +     `<div><div class="month-stat-key">Net to party</div><div class="month-stat-val">${formatPKR(g.net)}</div></div>`
           +     `<div><div class="month-stat-key">${profitLabel}</div><div class="month-stat-val" style="color:var(--success)">${formatPKR(g.profit)}</div></div>`
+          +     `<div><div class="month-stat-key">Owed to party</div><div class="month-stat-val ${g.owed > 0 ? 'coral' : ''}">${formatPKR(g.owed)}</div></div>`
+          +     `<div><div class="month-stat-key">Paid to party</div><div class="month-stat-val">${formatPKR(g.paidOut)}</div></div>`
           +   '</div>'
           +   ((warn || shot) ? `<div class="month-status-line">${warn}${shot}</div>` : '')
           + '</div></div>';
@@ -5633,15 +5806,17 @@
     function partyMonthStats(name) {
       const all = (dashboardCache.data && dashboardCache.data.allEntries) || [];
       const nowYM = new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0');
-      let count = 0, profit = 0;
+      let count = 0, profit = 0, owed = 0, paidOut = 0;
       all.forEach((e) => {
         if (e.receipt === 'Not Received') return;
         if ((e.clientName || '').trim().toLowerCase() !== name.toLowerCase()) return;
+        if (needsPartyPayout(e)) owed += e.netToParty;
+        if (e.partyPaid === 'Paid' && typeof e.netToParty === 'number') paidOut += e.netToParty;
         if ((e.paymentDate || '').slice(0, 7) !== nowYM) return;
         count += 1;
         if (typeof e.clientProfit === 'number') profit += e.clientProfit;
       });
-      return { count: count, profit: profit };
+      return { count: count, profit: profit, owed: owed, paidOut: paidOut };
     }
 
     function renderPartiesTab() {
@@ -5671,9 +5846,13 @@
           + '<div class="pcard-stats">'
           +   `<div><div class="pcard-stat-key">This month</div><div class="pcard-stat-val">${st.count} ${st.count === 1 ? 'payment' : 'payments'}</div></div>`
           +   `<div><div class="pcard-stat-key">My profit</div><div class="pcard-stat-val" style="color:var(--success)">${formatPKR(st.profit)}</div></div>`
+          +   `<div><div class="pcard-stat-key">Owed to party</div><div class="pcard-stat-val" style="color:${st.owed > 0 ? 'var(--coral-deep)' : 'inherit'}">${formatPKR(st.owed)}</div></div>`
+          +   `<div><div class="pcard-stat-key">Paid to party</div><div class="pcard-stat-val">${formatPKR(st.paidOut)}</div></div>`
           + '</div>'
           + '<div class="pcard-actions">'
+          + (st.owed > 0 ? `<button type="button" class="btn btn-primary" data-act="payout" data-party="${name}">Pay out</button>` : '')
           +   `<button type="button" class="btn btn-ghost" data-act="fee" data-party="${name}">Edit %</button>`
+          +   `<button type="button" class="btn btn-ghost" data-act="link" data-party="${name}">Link old payments</button>`
           +   loginBtns
           +   `<button type="button" class="btn btn-ghost danger" data-act="remove" data-party="${name}">Remove</button>`
           + '</div>'
@@ -5715,6 +5894,21 @@
           const r = await apiPost('parties.setFee', { party: party, feePct: v.fee });
           if (!r.ok) { showError("Couldn't save fee", r.error || 'Try again.'); return; }
           applyPartyResponse(r);
+          dashboardCache.data = null; loadDashboard();
+        } else if (act === 'payout') {
+          await startPayout(party);
+        } else if (act === 'link') {
+          const v = await showPromptModal({
+            eyebrow: 'Earlier payments', title: 'Link old payments for ' + party,
+            subtitle: "Older payments saved before logins existed are linked automatically when a party is added. If they were saved under a different spelling, type it exactly as it appears in the old records.",
+            fields: [{ name: 'alias', label: 'Name in old records', value: party }],
+            okLabel: 'Link'
+          });
+          if (!v) return;
+          const r = await apiPost('parties.linkHistory', { party: party, alias: v.alias });
+          if (!r.ok) { showError("Couldn't link", r.error || 'Try again.'); return; }
+          applyPartyResponse(r);
+          showSuccess('Done', (r.linked || 0) + ' earlier ' + (r.linked === 1 ? 'payment' : 'payments') + ' linked to ' + party + '.');
           dashboardCache.data = null; loadDashboard();
         } else if (act === 'create') {
           const r = await apiPost('parties.createLogin', { party: party });
@@ -5772,7 +5966,8 @@
           if (!r.ok) { showError("Couldn't add party", r.error || 'Try again.'); return; }
           form.reset();
           applyPartyResponse(r);
-          if (fee) { dashboardCache.data = null; loadDashboard(); }
+          if (r.linked) showSuccess('Earlier payments linked', r.linked + ' earlier ' + (r.linked === 1 ? 'payment' : 'payments') + ' attached to ' + name + '.');
+          if (fee || r.linked) { dashboardCache.data = null; loadDashboard(); }
         } catch (err) {
           showError('Network error', (err && err.message) || 'Try again.');
         }

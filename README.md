@@ -110,3 +110,20 @@ Three kinds of login:
   per month.
 - After pasting the new `apps-script.gs`, redeploy. The Users, Parties and
   Payments Log tabs gain their new columns automatically.
+
+## Payouts to parties, old payments, late screenshots
+
+- **Paying parties (client).** Activity has an **Owe party** filter (confirmed,
+  priced payments not yet paid out). Tick the payments (or tap **Pay out** on a
+  party's card in the Parties tab, which pre-selects that party's owed
+  payments), then **Pay party** in the bottom bar. Pick the date and an optional
+  reference. This writes `partyPaid`, `partyPaidDate` and `partyPayRef`
+  (Payments Log columns V-X), which the admin can also see. A payout can be
+  undone from the payment's details. Parties see "Paid to you" with the date
+  and reference.
+- **Old payments.** When a party is added, earlier payments saved under that
+  name with client id `legacy` (or blank) are linked to the client
+  automatically. **Link old payments** on a party card handles a different
+  spelling. Payments that already belong to a client are never moved.
+- **Late screenshots.** Any payment without a screenshot has an **Attach
+  screenshot** button in its details (client, party for their own, admin).
